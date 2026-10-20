@@ -141,7 +141,10 @@ namespace workerd::util {
   V(IO_CHANNELS_FROM_RUNNING_REQUEST)                                                              \
   /* WorkerInterface::fromException() makes the Rust worker in src/rust/worker/failure.rs          \
      instead of the C++ ErrorWorkerInterface in io/worker-interface.c++. */                        \
-  V(RUST_FAILURE_WORKER_INTERFACE)
+  V(RUST_FAILURE_WORKER_INTERFACE)                                                                 \
+  /* Expose the TypeScript TextEncoder (src/per_isolate/text-encoder.ts), which encodes in Rust    \
+     (src/rust/encoding/text_encoder.rs), instead of the C++ one (api/encoding.h). */              \
+  V(TS_TEXT_ENCODER)
 // clang-format on
 // --------------------------------------------------------------------------------------
 
