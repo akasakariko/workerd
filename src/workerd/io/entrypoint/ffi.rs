@@ -12,8 +12,9 @@
 
 #![allow(
     unsafe_code,
-    reason = "the cxx bridge expands to unsafe FFI glue, and invocation_request() and \
-              invocation_wait_until_tasks() return references"
+    reason = "the cxx bridge expands to unsafe FFI glue, invocation_request() and \
+              invocation_wait_until_tasks() return references, and C++ keeps the reference that \
+              WorkerEntrypoint::cxx() returns"
 )]
 
 use std::future::Future;
@@ -23,6 +24,8 @@ use cxx::KjException;
 use io_context::CatchPanics;
 use kj_rs::KjDate;
 use kj_rs::KjOwn;
+
+use crate::WorkerEntrypoint;
 
 #[cxx::bridge(namespace = "workerd::entrypoint")]
 pub mod bridge {
@@ -51,6 +54,11 @@ pub mod bridge {
         include!("workerd/io/entrypoint/ffi.h");
 
         type Invocation;
+        type CxxEntrypoint;
+
+        fn cxx_entrypoint_take_invocation(
+            entrypoint: Pin<&mut CxxEntrypoint>,
+        ) -> Result<KjOwn<Invocation>>;
 
         /// # Safety
         /// The request has not been taken out of `invocation`.
@@ -74,14 +82,33 @@ pub mod bridge {
     }
 
     extern "Rust" {
+        type WorkerEntrypoint;
         type ScheduledEvent;
 
-        /// Starts the scheduled event of `invocation`: see `runScheduled()` in `ffi.h`.
+        /// The Rust WorkerEntrypoint that owns `cxx`: see `newWorkerEntrypoint()` in `ffi.h`.
+        #[expect(clippy::unnecessary_box_returns, reason = "cxx requires a Box")]
+        fn worker_entrypoint_new(cxx: KjOwn<CxxEntrypoint>) -> Box<WorkerEntrypoint>;
+        /// The C++ WorkerEntrypoint that `self` owns.
+        ///
+        /// # Safety
+        /// The reference is valid while `self` is: C++ keeps it no longer than the `Box` that
+        /// holds `self`.
+        #[expect(
+            clippy::needless_lifetimes,
+            reason = "the cxx bridge requires the lifetime of a returned reference"
+        )]
+        unsafe fn cxx<'a>(self: &'a mut WorkerEntrypoint) -> Pin<&'a mut CxxEntrypoint>;
+
+        /// Starts the scheduled event of `entrypoint`, for `scheduled_time` and the cron pattern
+        /// `cron`: reports it to the tracer, delivers it and starts the handler in a waitUntil
+        /// task (see `scheduled.rs`). Fails with the exception of a step that fails.
         fn scheduled_event_start(
-            invocation: KjOwn<Invocation>,
+            entrypoint: &mut WorkerEntrypoint,
             scheduled_time: KjDate,
             cron: &[u8],
         ) -> Result<Box<ScheduledEvent>>;
+        /// Waits for the request of a scheduled event to finish, up to the time limit of
+        /// scheduled events. Dropping the future cancels the request.
         async fn scheduled_event_finish(event: Box<ScheduledEvent>) -> Result<ScheduledResult>;
     }
 }
@@ -105,13 +132,17 @@ type ScheduledFinish = Pin<Box<dyn Future<Output = Result<bridge::ScheduledResul
 /// A scheduled event that Rust has started, until it finishes.
 pub struct ScheduledEvent(CatchPanics<ScheduledFinish>);
 
+#[expect(clippy::unnecessary_box_returns, reason = "cxx requires a Box")]
+fn worker_entrypoint_new(cxx: KjOwn<bridge::CxxEntrypoint>) -> Box<WorkerEntrypoint> {
+    Box::new(WorkerEntrypoint::new(cxx))
+}
+
 fn scheduled_event_start(
-    invocation: KjOwn<bridge::Invocation>,
+    entrypoint: &mut WorkerEntrypoint,
     scheduled_time: KjDate,
     cron: &[u8],
 ) -> Result<Box<ScheduledEvent>, KjException> {
-    let finished =
-        crate::scheduled::start(crate::Invocation::new(invocation), scheduled_time, cron)?;
+    let finished = crate::scheduled::start(entrypoint.take_invocation()?, scheduled_time, cron)?;
     Ok(Box::new(ScheduledEvent(CatchPanics::new(
         Box::pin(async move { Ok(finished.await?.into()) }),
         "the future of a scheduled event",

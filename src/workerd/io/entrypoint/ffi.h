@@ -20,6 +20,9 @@ struct ScheduledResult;
 // does its work when it is called; an async one returns a promise for what remains to wait for.
 namespace workerd::entrypoint {
 
+// CxxEntrypoint::takeInvocation().
+kj::Own<Invocation> cxx_entrypoint_take_invocation(CxxEntrypoint& entrypoint);
+
 // The event's request, which Rust passes to the IoContext::IncomingRequest calls of the io-context
 // crate. Taken out of the invocation, by invocation_take_request(), to be drained or finished.
 IoContext::IncomingRequest& invocation_request(Invocation& invocation);
@@ -43,12 +46,9 @@ void log_drain_failure(kj::Exception exception);
 // waiting for a scheduled event's request to finish.
 void trace_scheduled_wait_for_finished();
 
-// Delivers the scheduled event `event` to its handler from Rust, for `scheduledTime` and `cron`,
-// as WorkerEntrypoint::runScheduled() does in C++: reports it to the tracer, delivers it, starts
-// the handler in a waitUntil task and waits for the request to finish (see `scheduled.rs`).
-// Everything but the wait happens before it returns, and an exception it fails with before then
-// is thrown, as in C++. Dropping the promise cancels the request.
-kj::Promise<WorkerInterface::ScheduledResult> runScheduled(
-    kj::Own<Invocation> invocation, kj::Date scheduledTime, kj::StringPtr cron);
+// Makes a Rust WorkerEntrypoint (see `lib.rs`) that owns `cxx`, and returns its WorkerInterface.
+// It delivers the scheduled event from Rust and passes every other event to `cxx`, which then
+// does its work as it would on its own.
+kj::Own<WorkerInterface> newWorkerEntrypoint(kj::Own<CxxEntrypoint> cxx);
 
 }  // namespace workerd::entrypoint

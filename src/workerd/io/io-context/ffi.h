@@ -29,6 +29,9 @@ using IncomingRequest = ::workerd::IoContext_IncomingRequest;
 // otherwise.
 void incoming_request_delivered(IncomingRequest& request, ::rust::Slice<const kj::byte> eventType);
 
+// Fails if the request's IoContext belongs to an actor.
+void incoming_request_assert_no_actor(IncomingRequest& request);
+
 // Tells the request's tracer, if it has one, that the event is a scheduled event for
 // `scheduledTime` and the cron pattern `cron`.
 void incoming_request_set_scheduled_event_info(

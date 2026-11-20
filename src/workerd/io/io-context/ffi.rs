@@ -222,6 +222,9 @@ pub mod bridge {
             request: Pin<&mut IncomingRequest>,
             event_type: &[u8],
         ) -> Result<()>;
+        /// Fails if the request's `IoContext` belongs to an actor:
+        /// `KJ_ASSERT(request.getContext().getActor() == kj::none)`.
+        fn incoming_request_assert_no_actor(request: Pin<&mut IncomingRequest>) -> Result<()>;
         /// Tells the request's tracer, if it has one, that the event is a scheduled event for
         /// `scheduled_time` and the cron pattern `cron`.
         fn incoming_request_set_scheduled_event_info(

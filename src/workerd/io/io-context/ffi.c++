@@ -32,6 +32,10 @@ void incoming_request_delivered(IncomingRequest& request, ::rust::Slice<const kj
   request.delivered(kj::StringPtr(text.asChars().begin(), text.size()));
 }
 
+void incoming_request_assert_no_actor(IncomingRequest& request) {
+  KJ_ASSERT(request.getContext().getActor() == kj::none);
+}
+
 void incoming_request_set_scheduled_event_info(
     IncomingRequest& request, kj::Date scheduledTime, ::rust::Slice<const kj::byte> cron) {
   KJ_IF_SOME(tracer, request.getWorkerTracer()) {

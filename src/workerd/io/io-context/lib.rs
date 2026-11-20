@@ -10,8 +10,8 @@
 //!
 //! It also binds `IoContext::IncomingRequest` ([`IncomingRequest`]), for the code that delivers an
 //! event: [`incoming_request_delivered`], [`incoming_request_drain`],
-//! [`incoming_request_finish_scheduled`] and [`incoming_request_set_scheduled_event_info`] are the
-//! calls on it, made as C++ makes them.
+//! [`incoming_request_finish_scheduled`], [`incoming_request_set_scheduled_event_info`] and
+//! [`incoming_request_assert_no_actor`] are the calls on it, made as C++ makes them.
 
 mod ffi;
 mod trace;
@@ -37,6 +37,7 @@ use std::time::UNIX_EPOCH;
 pub use ffi::CatchPanics;
 use ffi::bridge;
 pub use ffi::bridge::IncomingRequest;
+pub use ffi::bridge::incoming_request_assert_no_actor;
 pub use ffi::bridge::incoming_request_drain;
 pub use ffi::bridge::incoming_request_finish_scheduled;
 pub use ffi::bridge::incoming_request_set_scheduled_event_info;
