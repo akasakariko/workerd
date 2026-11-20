@@ -141,7 +141,12 @@ namespace workerd::util {
   V(IO_CHANNELS_FROM_RUNNING_REQUEST)                                                              \
   /* WorkerInterface::fromException() makes the Rust worker in src/rust/worker/failure.rs          \
      instead of the C++ ErrorWorkerInterface in io/worker-interface.c++. */                        \
-  V(RUST_FAILURE_WORKER_INTERFACE)
+  V(RUST_FAILURE_WORKER_INTERFACE)                                                                 \
+  /* WorkerEntrypoint::runScheduled() hands the scheduled event to Rust (io/entrypoint), which     \
+     reports it to the tracer, delivers it, starts the handler in a waitUntil task and waits for   \
+     the request to finish, rather than doing all of that in C++. The handler is still started by  \
+     C++ ServiceWorkerGlobalScope::startScheduled(). */                                            \
+  V(RUST_ENTRYPOINT_SCHEDULED)
 // clang-format on
 // --------------------------------------------------------------------------------------
 

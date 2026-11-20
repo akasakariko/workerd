@@ -1,0 +1,125 @@
+// Copyright (c) 2026 Cloudflare, Inc.
+// Licensed under the Apache 2.0 license found in the LICENSE file or at:
+//     https://opensource.org/licenses/Apache-2.0
+
+//! The bridge to the C++ calls in `ffi.h`, and the events that C++ hands to Rust through it.
+//!
+//! Each C++ call does its work when it is called, an async one included: it returns a future for
+//! what remains to wait for. A panic in a Rust function that C++ calls reaches C++ as a KJ
+//! exception, through the cxx bridge; a future that C++ polls and drops is wrapped in
+//! [`CatchPanics`], since kj-rs polls and drops it through `extern "C"` functions, where a panic
+//! would abort the process.
+
+#![allow(
+    unsafe_code,
+    reason = "the cxx bridge expands to unsafe FFI glue, and invocation_request() and \
+              invocation_wait_until_tasks() return references"
+)]
+
+use std::future::Future;
+use std::pin::Pin;
+
+use cxx::KjException;
+use io_context::CatchPanics;
+use kj_rs::KjDate;
+use kj_rs::KjOwn;
+
+#[cxx::bridge(namespace = "workerd::entrypoint")]
+pub mod bridge {
+    #[namespace = "workerd::rust::worker"]
+    unsafe extern "C++" {
+        include!("workerd/rust/worker/ffi.rs.h");
+
+        type ScheduledResult = worker::ffi::bridge::ScheduledResult;
+    }
+
+    #[namespace = "workerd::io_context"]
+    unsafe extern "C++" {
+        include!("workerd/io/io-context/ffi.h");
+
+        type IncomingRequest = io_context::IncomingRequest;
+    }
+
+    #[namespace = "kj::rust"]
+    unsafe extern "C++" {
+        include!("workerd/rust/kj/ffi.h");
+
+        type TaskSet = kj::io::ffi::TaskSet;
+    }
+
+    unsafe extern "C++" {
+        include!("workerd/io/entrypoint/ffi.h");
+
+        type Invocation;
+
+        /// # Safety
+        /// The request has not been taken out of `invocation`.
+        unsafe fn invocation_request<'a>(
+            invocation: Pin<&'a mut Invocation>,
+        ) -> Pin<&'a mut IncomingRequest>;
+        fn invocation_take_request(invocation: Pin<&mut Invocation>) -> KjOwn<IncomingRequest>;
+        /// # Safety
+        /// None beyond the borrow: the tasks outlive `invocation`. (cxx requires a function that
+        /// returns a reference with an explicit lifetime to be `unsafe`.)
+        unsafe fn invocation_wait_until_tasks<'a>(
+            invocation: Pin<&'a mut Invocation>,
+        ) -> Pin<&'a mut TaskSet>;
+        fn invocation_start_scheduled_in_wait_until(
+            invocation: Pin<&mut Invocation>,
+            scheduled_time: KjDate,
+            cron: &[u8],
+        ) -> Result<()>;
+        fn log_drain_failure(exception: KjException);
+        fn trace_scheduled_wait_for_finished();
+    }
+
+    extern "Rust" {
+        type ScheduledEvent;
+
+        /// Starts the scheduled event of `invocation`: see `runScheduled()` in `ffi.h`.
+        fn scheduled_event_start(
+            invocation: KjOwn<Invocation>,
+            scheduled_time: KjDate,
+            cron: &[u8],
+        ) -> Result<Box<ScheduledEvent>>;
+        async fn scheduled_event_finish(event: Box<ScheduledEvent>) -> Result<ScheduledResult>;
+    }
+}
+
+/// The request of `invocation`: see `invocation_request()` in `ffi.h`.
+pub fn request(invocation: Pin<&mut bridge::Invocation>) -> Pin<&mut bridge::IncomingRequest> {
+    // SAFETY: the typestates in `lib.rs` take the request out only when they finish or drain it,
+    // after which they call nothing else on the invocation.
+    unsafe { bridge::invocation_request(invocation) }
+}
+
+/// The waitUntil tasks of `invocation`'s `WorkerEntrypoint`, which a request drains into.
+pub fn wait_until_tasks(invocation: Pin<&mut bridge::Invocation>) -> Pin<&mut bridge::TaskSet> {
+    // SAFETY: C++ returns a reference that lives as long as `invocation`.
+    unsafe { bridge::invocation_wait_until_tasks(invocation) }
+}
+
+/// What a scheduled event that Rust has started finishes with.
+type ScheduledFinish = Pin<Box<dyn Future<Output = Result<bridge::ScheduledResult, KjException>>>>;
+
+/// A scheduled event that Rust has started, until it finishes.
+pub struct ScheduledEvent(CatchPanics<ScheduledFinish>);
+
+fn scheduled_event_start(
+    invocation: KjOwn<bridge::Invocation>,
+    scheduled_time: KjDate,
+    cron: &[u8],
+) -> Result<Box<ScheduledEvent>, KjException> {
+    let finished =
+        crate::scheduled::start(crate::Invocation::new(invocation), scheduled_time, cron)?;
+    Ok(Box::new(ScheduledEvent(CatchPanics::new(
+        Box::pin(async move { Ok(finished.await?.into()) }),
+        "the future of a scheduled event",
+    ))))
+}
+
+async fn scheduled_event_finish(
+    event: Box<ScheduledEvent>,
+) -> Result<bridge::ScheduledResult, KjException> {
+    event.0.await?
+}

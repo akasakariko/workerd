@@ -11,11 +11,36 @@
 
 #include <cstdint>
 
+namespace workerd::rust::worker {
+struct ScheduledResult;
+}  // namespace workerd::rust::worker
+
 // The IoContext calls `ffi.rs` makes. Rust identifies an IoContext by its IoContext::Id, as a
 // uint64_t, and holds no reference to it. Each call below that takes an `id` uses the current
 // IoContext, and fails unless `id` identifies it: ids are never reused, so a stale id cannot
 // reach another request's IoContext, or one that has been destroyed.
 namespace workerd::io_context {
+
+// IoContext::IncomingRequest, and the calls on it that Rust makes, as C++ has them.
+using IncomingRequest = ::workerd::IoContext_IncomingRequest;
+
+// IoContext::IncomingRequest::delivered(eventType), with `eventType`: the bytes of a
+// NUL-terminated string that outlives the request, with its NUL, and with no other NUL. Fails
+// otherwise.
+void incoming_request_delivered(IncomingRequest& request, ::rust::Slice<const kj::byte> eventType);
+
+// Tells the request's tracer, if it has one, that the event is a scheduled event for
+// `scheduledTime` and the cron pattern `cron`.
+void incoming_request_set_scheduled_event_info(
+    IncomingRequest& request, kj::Date scheduledTime, ::rust::Slice<const kj::byte> cron);
+
+// IoContext::IncomingRequest::drain(waitUntilTasks, request).
+void incoming_request_drain(kj::Own<IncomingRequest> request, kj::TaskSet& waitUntilTasks);
+
+// IoContext::IncomingRequest::finishScheduled(request). An exception that it throws rejects the
+// promise.
+kj::Promise<::workerd::rust::worker::ScheduledResult> incoming_request_finish_scheduled(
+    kj::Own<IncomingRequest> request);
 
 // The message of the error IoContext::current() throws outside a request.
 ::rust::Str io_context_no_request_message();
