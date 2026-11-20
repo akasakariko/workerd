@@ -3,7 +3,7 @@
 //     https://opensource.org/licenses/Apache-2.0
 
 // The callback of `await_io` runs with a new lock, after the caller has returned: it cannot
-// capture a handle of the caller's lock.
+// capture a handle of the caller's lock. A handle is not `Send`, as the callback is.
 use io_context::IoContext;
 use jsg::v8;
 
@@ -12,5 +12,5 @@ pub fn t<'s>(
     context: &IoContext<'s>,
 ) -> jsg::Result<v8::Local<'s, v8::Promise>> {
     let object: v8::Local<'s, v8::Value> = lock.new_object().into();
-    context.await_io(lock, async {}, move |_lock, ()| Ok(object)) //~ ERROR lifetime may not live long enough
+    context.await_io(lock, async {}, move |_lock, ()| Ok(object)) //~ ERROR cannot be sent between threads safely
 }
