@@ -2,7 +2,7 @@
 // Licensed under the Apache 2.0 license found in the LICENSE file or at:
 //     https://opensource.org/licenses/Apache-2.0
 
-import { strictEqual, throws } from 'node:assert';
+import { deepStrictEqual, strictEqual, throws } from 'node:assert';
 import { inspect } from 'node:util';
 
 export const test1 = {
@@ -401,5 +401,23 @@ export const sliceClamp = {
     strictEqual(await slice(-(2 ** 53)), 'abcd');
     strictEqual(await slice(2 ** 64), '');
     strictEqual(await slice('1', '3'), 'bc');
+  },
+};
+
+export const unpairedSurrogates = {
+  async test() {
+    for (const make of [(p) => new Blob(p), (p) => new File(p, 'f')]) {
+      for (const [input, expected] of [
+        ['\ud800', [0xef, 0xbf, 0xbd]],
+        ['\udc00', [0xef, 0xbf, 0xbd]],
+        ['a\ud800b', [0x61, 0xef, 0xbf, 0xbd, 0x62]],
+        ['\ud83d\ude00', [0xf0, 0x9f, 0x98, 0x80]],
+      ]) {
+        deepStrictEqual(
+          Array.from(new Uint8Array(await make([input]).arrayBuffer())),
+          expected
+        );
+      }
+    }
   },
 };
