@@ -548,13 +548,21 @@ build:pgo-use --@rules_rust//:extra_rustc_flag=-Cllvm-args=-no-pgo-warn-mismatch
 # expects.
 build:rust-lto --@rules_rust//:extra_rustc_flag=-Clinker-plugin-lto
 
-build:release_macos --config=release_unix
+# The macOS release builds are optimized with ThinLTO and the profile trained on Linux, like the
+# Linux ones but for the Rust code, which isn't compiled to bitcode (build/pgo/README.md). They link
+# with Xcode's linker, as lld can't compile Xcode's arm64 bitcode. release_macos-without-pgo is the
+# same build without ThinLTO or the profile.
+build:release_macos-without-pgo --config=release_unix
 # Disable generating LC_DATA_IN_CODE and LC_FUNCTION_STARTS binary sections, two rarely used types
 # of macOS debug info. These sections are largely undocumented, but are used by LLDB to improve
 # debugging on binaries that are otherwise stripped. There should be no need to include this
 # data in releases.
-build:release_macos --linkopt="-Wl,-no_data_in_code_info"
-build:release_macos --linkopt="-Wl,-no_function_starts"
+build:release_macos-without-pgo --linkopt="-Wl,-no_data_in_code_info"
+build:release_macos-without-pgo --linkopt="-Wl,-no_function_starts"
+build:release_macos --config=release_macos-without-pgo --config=thin-lto --config=pgo-use
+# apple_support's fdo_optimize feature also passes GCC's -fprofile-correction, which clang ignores
+# with a warning.
+build:release_macos --copt=-Wno-ignored-optimization-argument
 
 # Cross-compiled release build for x86_64.
 build:release_macos_cross_x86_64 --config=release_macos

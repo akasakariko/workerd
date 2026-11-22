@@ -116,12 +116,12 @@ jobs:
       runner_extra_bazel_args: ${{ format('--strip=always --config={0} --config=ci-release --config=wpt-report', matrix.bazel-config) }}
       arch_name: ${{ matrix.target-arch }}
       upload_binary: true
-      macos_use_lld: true
+      # The macOS release builds link with Xcode's linker, which ThinLTO needs there (.bazelrc).
       # On release, generate a full WPT report...
       run_tests: true
       upload_test_logs: true
-      # ...and on Linux, run the serving workload on the PGO binary (build/pgo/README.md).
-      test_target: ${{ matrix.os-name == 'Linux' && '//src/wpt/... //src/workerd/server/tests/pgo-workload/...' || '//src/wpt/...' }}
+      # ...and on Linux and macOS, run the serving workload on the PGO binary (build/pgo/README.md).
+      test_target: ${{ matrix.os-name != 'Windows' && '//src/wpt/... //src/workerd/server/tests/pgo-workload/...' || '//src/wpt/...' }}
     secrets:
       BAZEL_CACHE_KEY: ${{ secrets.BAZEL_CACHE_KEY }}
       WORKERS_MIRROR_URL: ${{ secrets.WORKERS_MIRROR_URL }}

@@ -10,7 +10,10 @@ Rust code: rustc reads the same profile (`-Cprofile-use`) and compiles to bitcod
 code together, inlining across the cxx bridge.
 
 `--config=release_linux-without-pgo` is the release build without ThinLTO or the profile, for
-comparisons. The macOS and Windows release builds don't use the profile yet.
+comparisons. The macOS release builds, arm64 and x64 (`--config=release_macos` and
+`--config=release_macos_cross_x86_64`), use ThinLTO and the same profile, but not for the Rust code
+(see [macOS](#macos)); `--config=release_macos-without-pgo` leaves both out. The Windows release
+build doesn't use the profile yet.
 
 ## The profile
 
@@ -25,8 +28,8 @@ patch replaces `${extra_rustc_inputs}` in the `-Cprofile-use` flag with the prof
 Release assets don't expire, but deleting one would break the release builds of every commit that
 names it. [`release.yml`](../../.github/workflows/release.yml) runs the release builds on every
 push to main, publishing only the first of each release version. So a missing profile, or a change
-that breaks the PGO build, fails the merge that follows it. Its Linux builds also test the PGO
-binary with the serving workload.
+that breaks the PGO build, fails the merge that follows it. Its Linux and macOS builds also test
+the PGO binary with the serving workload.
 
 Clang matches the profile to the code in its own architecture-independent form, so the arm64 build
 uses the profile trained on x64. Its target-specific code, which the x64 build doesn't have, gets
@@ -34,6 +37,26 @@ no profile data.
 
 Functions changed since the profile was trained no longer match it, and compile as if the profile
 didn't cover them, so retrain after changes that move the hot code, such as a V8 update.
+
+## macOS
+
+The macOS builds compile with Xcode's clang, whose LLVM is older than the toolchain's that writes
+the profile. It reads indexed profiles up to version 12, and the profile is version 13, which
+differs only in the hash that clang's frontend instrumentation uses by default. The profile comes
+from IR instrumentation, which doesn't use that hash, so `//build/pgo:profile` gives Xcode's clang
+a copy marked as version 12. Xcode's clang matches most of the functions that the profile covers:
+in `src/workerd/io/io-context.c++`, 301 of the 394 it has data for; the others differ in their
+control flow, as the compiler and headers aren't Linux's. Static functions in generated files don't
+match at all, as their names include the output directory (`bazel-out/k8-opt/bin/...` on Linux).
+
+The Rust code isn't compiled to bitcode, as no linker on macOS can read both rustc's bitcode and
+Xcode's clang's. Xcode's linker reads bitcode from Xcode's LLVM, which is older than rustc's. lld
+reads both, but can't compile Xcode's arm64 bitcode: Xcode's clang probes large stack frames
+through `__chkstk_darwin`, which only Xcode's LLVM supports on arm64. So the release builds link
+with Xcode's linker, and the release workflow doesn't switch them to lld (`macos_use_lld`). rustc
+still reads the profile, but most Rust functions don't match it, as the names of those that involve
+the standard library's types include its hash, which differs by target: of the 67 functions that
+`src/rust/kj` defines, 20 have names that the profile knows.
 
 ## Training
 
