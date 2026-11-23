@@ -513,6 +513,59 @@ KJ_TEST("alarm scheduling does not start synchronously before nested explicit lo
   KJ_ASSERT(expectSync(test.getAlarm()) == oneMs);
 }
 
+KJ_TEST("commit doesn't schedule an alarm that an open transaction then rolls back") {
+  ActorSqliteTest test;
+
+  test.setAlarm(twoMs);
+  test.pollAndExpectCalls({"scheduleRun(2ms)"})[0]->fulfill();
+  test.pollAndExpectCalls({"commit"})[0]->fulfill();
+  test.pollAndExpectCalls({});
+
+  // Moving the alarm earlier makes the commit wait for the scheduler, while a transaction opens.
+  test.setAlarm(oneMs);
+  auto fulfiller1Ms = kj::mv(test.pollAndExpectCalls({"scheduleRun(1ms)"})[0]);
+  {
+    auto txn = test.startTransaction();
+    txn->setAlarm(threeMs, {}, nullptr);
+    fulfiller1Ms->fulfill();
+    auto commitFulfiller = kj::mv(test.pollAndExpectCalls({"commit"})[0]);
+    txn->rollback().wait(test.ws);
+    commitFulfiller->fulfill();
+  }
+
+  test.pollAndExpectCalls({});
+  KJ_ASSERT(expectSync(test.getAlarm()) == oneMs);
+}
+
+KJ_TEST("open transaction's alarm is scheduled once the transaction's commit completes") {
+  ActorSqliteTest test;
+
+  test.setAlarm(twoMs);
+  test.pollAndExpectCalls({"scheduleRun(2ms)"})[0]->fulfill();
+  test.pollAndExpectCalls({"commit"})[0]->fulfill();
+  test.pollAndExpectCalls({});
+
+  // Moving the alarm earlier makes the commit wait for the scheduler, while a transaction opens.
+  test.setAlarm(oneMs);
+  auto fulfiller1Ms = kj::mv(test.pollAndExpectCalls({"scheduleRun(1ms)"})[0]);
+  {
+    auto txn = test.startTransaction();
+    txn->setAlarm(threeMs, {}, nullptr);
+    fulfiller1Ms->fulfill();
+    auto commit1MsFulfiller = kj::mv(test.pollAndExpectCalls({"commit"})[0]);
+    txn->commit();
+    auto commit3MsFulfiller = kj::mv(test.pollAndExpectCalls({"commit"})[0]);
+
+    commit1MsFulfiller->fulfill();
+    test.pollAndExpectCalls({});
+    commit3MsFulfiller->fulfill();
+  }
+
+  test.pollAndExpectCalls({"scheduleRun(3ms)"})[0]->fulfill();
+  test.pollAndExpectCalls({});
+  KJ_ASSERT(expectSync(test.getAlarm()) == threeMs);
+}
+
 KJ_TEST("synchronous alarm scheduling failure causes local db commit to throw synchronously") {
   ActorSqliteTest test({.monitorOutputGate = false});
   auto promise = test.gate.onBroken();

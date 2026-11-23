@@ -125,7 +125,9 @@ kj::Promise<void> ActorSqlite::ImplicitTxn::waitForCompletion() {
 
 ActorSqlite::ExplicitTxn::ExplicitTxn(ActorSqlite& actorSqlite): actorSqlite(actorSqlite) {
   KJ_SWITCH_ONEOF(actorSqlite.currentTxn) {
-    KJ_CASE_ONEOF(_, NoTxn) {}
+    KJ_CASE_ONEOF(_, NoTxn) {
+      alarmBeforeTxn = actorSqlite.metadata.getAlarm();
+    }
     KJ_CASE_ONEOF(implicit, ImplicitTxn*) {
       // ActorSqlite::startTransaction() should have handled this case before constructing
       // ExplicitTxn.
@@ -139,6 +141,7 @@ ActorSqlite::ExplicitTxn::ExplicitTxn(ActorSqlite& actorSqlite): actorSqlite(act
       depth = exp->depth + 1;
       alarmDirty = exp->alarmDirty;
       someWriteConfirmed = exp->someWriteConfirmed;
+      alarmBeforeTxn = exp->alarmBeforeTxn;
     }
   }
   actorSqlite.currentTxn = this;
@@ -180,6 +183,14 @@ bool ActorSqlite::ExplicitTxn::getAlarmDirty() {
 
 void ActorSqlite::ExplicitTxn::setAlarmDirty() {
   alarmDirty = true;
+}
+
+kj::Maybe<kj::Date> ActorSqlite::ExplicitTxn::getCommittedAlarm() {
+  // A nested transaction's outermost transaction can't have finished yet.
+  if (committed && parent == kj::none) {
+    return actorSqlite.metadata.getAlarm();
+  }
+  return alarmBeforeTxn;
 }
 
 void ActorSqlite::ExplicitTxn::setSomeWriteConfirmed(bool someWriteConfirmed) {
@@ -528,6 +539,13 @@ ActorSqlite::PrecommitAlarmState ActorSqlite::startPrecommitAlarmScheduling() {
   return kj::mv(state);
 }
 
+kj::Maybe<kj::Date> ActorSqlite::getCommittedAlarm() {
+  KJ_IF_SOME(txn, currentTxn.tryGet<ExplicitTxn*>()) {
+    return txn->getCommittedAlarm();
+  }
+  return metadata.getAlarm();
+}
+
 kj::Promise<void> ActorSqlite::commitImpl(
     ActorSqlite::PrecommitAlarmState precommitAlarmState, SpanParent parentSpan) {
   auto commitSpan = parentSpan.newChild("actor_sqlite_commit"_kjc);
@@ -617,7 +635,7 @@ kj::Promise<void> ActorSqlite::commitImpl(
   // Issue the commitCallback() request to persist the db state, then synchronously clear the
   // pending commit so that the next commitImpl() invocation starts its own set of precommit alarm
   // updates and db commit.
-  auto alarmStateForCommit = metadata.getAlarm();
+  auto alarmStateForCommit = getCommittedAlarm();
 
   // Capture the alarm version before going async to detect concurrent alarm changes. If the
   // alarmVersion changes while we are in-flight, we should skip attempting any move-later alarm
