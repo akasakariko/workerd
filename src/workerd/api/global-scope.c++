@@ -354,7 +354,7 @@ kj::Promise<void> ServiceWorkerGlobalScope::connectUdp(kj::String host,
     kj::Maybe<ExportedHandler&> exportedHandler) {
   ExportedHandler& eh = JSG_REQUIRE_NONNULL(exportedHandler, Error,
       "Connect ingress is not currently supported with Service Workers syntax.");
-  KJ_REQUIRE(FeatureFlags::get(lock).getUdpIngress(),
+  KJ_REQUIRE(isUdpIngressEnabled(FeatureFlags::get(lock)),
       "UDP ingress is disabled. Enable the udp_ingress compatibility flag.");
 
   KJ_IF_SOME(handler, eh.connect) {

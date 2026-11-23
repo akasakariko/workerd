@@ -134,7 +134,7 @@ bool socketHasProtocolProperty(CompatibilityFlags::Reader flags) {
   return result;
 }
 
-KJ_TEST("Socket protocol requires udp_ingress") {
+KJ_TEST("udp_ingress exposes Socket.protocol") {
   capnp::MallocMessageBuilder message;
   auto flags = message.initRoot<CompatibilityFlags>();
   flags.setStreamsJavaScriptControllers(true);
@@ -142,16 +142,13 @@ KJ_TEST("Socket protocol requires udp_ingress") {
 
   flags.setUdpIngress(true);
   KJ_EXPECT(socketHasProtocolProperty(flags.asReader()));
-
-  flags.setUdpIngress(false);
-  flags.setWorkerdExperimental(true);
-  KJ_EXPECT(!socketHasProtocolProperty(flags.asReader()));
 }
 
 KJ_TEST("UDP writable stream snapshots bytes before asynchronous send") {
   capnp::MallocMessageBuilder flagsMessage;
   auto flags = flagsMessage.initRoot<CompatibilityFlags>();
   flags.setStreamsJavaScriptControllers(true);
+  flags.setUdpIngress(true);
   TestFixture fixture(TestFixture::SetupParams{.featureFlags = flags.asReader()});
   kj::Pin<AsyncSendState> state;
 
