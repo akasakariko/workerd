@@ -34,4 +34,27 @@ void startScheduledInWaitUntil(IoContext& context,
     kj::Maybe<Worker::VersionInfo> versionInfo,
     Frankenvalue props);
 
+// What finds the exported handler that an event is delivered to, taken out of an Invocation for
+// the function that runs the handler, as a C++ event's lambda captures it.
+struct HandlerLookup {
+  kj::Maybe<kj::String> entrypointName;
+  kj::Maybe<Worker::VersionInfo> versionInfo;
+  Frankenvalue props;
+};
+
+// The handles of the exported handler that an event is delivered to. Each is undefined if there is
+// no handler, as under Service Workers syntax, and `ctx` is also undefined if the handler has none.
+struct HandlerHandles {
+  v8::Local<v8::Value> handler;
+  v8::Local<v8::Value> env;
+  v8::Local<v8::Value> ctx;
+};
+
+// Finds the exported handler that `lookup` names with Worker::Lock::getExportedHandler(), in
+// IoContext::run() for `context`, and returns its handles, in the lock's HandleScope. JavaScript
+// that finding it runs, such as a class entrypoint's constructor, can throw, and the exception is
+// thrown on. The entrypoint crate runs it as the C++ prelude of a run in a waitUntil task
+// (`io_context::RunPrelude`), before Rust holds the lock.
+HandlerHandles getHandlerHandles(Worker::Lock& lock, IoContext& context, HandlerLookup lookup);
+
 }  // namespace workerd::entrypoint

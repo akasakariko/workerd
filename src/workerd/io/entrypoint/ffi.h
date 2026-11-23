@@ -5,6 +5,7 @@
 #pragma once
 
 #include <workerd/io/entrypoint-invocation.h>
+#include <workerd/io/io-context/ffi.h>
 #include <workerd/io/worker-interface.h>
 
 #include <rust/cxx.h>
@@ -29,6 +30,12 @@ kj::Own<IoContext::IncomingRequest> invocation_take_request(Invocation& invocati
 // into them.
 kj::TaskSet& invocation_wait_until_tasks(Invocation& invocation);
 
+// Takes what finds the event's handler out of the invocation (its entrypoint name, version info
+// and props), as the prelude of a run in a waitUntil task: in the run, before it calls Rust, the
+// prelude finds the handler with getHandlerHandles() (`io/entrypoint-invocation.h`) and returns
+// the handler, env and ctx, in that order.
+kj::Own<io_context::RunPrelude> invocation_take_handler_lookup(Invocation& invocation);
+
 // startScheduledInWaitUntil() (`io/entrypoint-invocation.h`), which
 // WorkerEntrypoint::runScheduled() also calls, for the event's request, for `scheduledTime` and
 // the cron pattern `cron`. Takes the event's entrypoint name, version info and props.
@@ -43,6 +50,10 @@ void log_drain_failure(kj::Exception exception);
 // waiting for a scheduled event's request to finish.
 void trace_scheduled_wait_for_finished();
 
+// The span "WorkerEntrypoint::test() waitForFinished()", emitted as the test event's request
+// starts to finish.
+void trace_test_wait_for_finished();
+
 // Delivers the scheduled event `event` to its handler from Rust, for `scheduledTime` and `cron`,
 // as WorkerEntrypoint::runScheduled() does in C++: reports it to the tracer, delivers it, starts
 // the handler in a waitUntil task and waits for the request to finish (see `scheduled.rs`).
@@ -50,5 +61,12 @@ void trace_scheduled_wait_for_finished();
 // is thrown, as in C++. Dropping the promise cancels the request.
 kj::Promise<WorkerInterface::ScheduledResult> runScheduled(
     kj::Own<Invocation> invocation, kj::Date scheduledTime, kj::StringPtr cron);
+
+// Delivers the test event `invocation` to its handler's test() from Rust: reports it to the
+// tracer, delivers it, calls the handler in a waitUntil task and waits for the request to finish
+// (see `test.rs`). Resolves with whether the test passed. Everything but the wait happens before
+// it returns, and an exception it fails with before then is thrown. Dropping the promise cancels
+// the request.
+kj::Promise<bool> runTest(kj::Own<Invocation> invocation);
 
 }  // namespace workerd::entrypoint

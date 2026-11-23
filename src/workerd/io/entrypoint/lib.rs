@@ -20,12 +20,15 @@
 
 mod ffi;
 mod scheduled;
+mod test;
 
 use std::ffi::CStr;
 use std::future::Future;
 
 use cxx::KjException;
 use ffi::bridge;
+use io_context::RunError;
+use jsg::v8;
 use kj_rs::KjDate;
 use kj_rs::KjOwn;
 
@@ -41,6 +44,14 @@ impl Invocation {
     #[must_use]
     pub fn new(invocation: KjOwn<bridge::Invocation>) -> Self {
         Self { invocation }
+    }
+
+    /// Tells the request's tracer, if it has one, that the event is a custom event.
+    ///
+    /// # Errors
+    /// Fails with the exception the tracer throws.
+    pub fn set_custom_event_info(&mut self) -> Result<(), KjException> {
+        io_context::incoming_request_set_custom_event_info(ffi::request(self.invocation.pin_mut()))
     }
 
     /// Tells the request's tracer, if it has one, that the event is a scheduled event for
@@ -113,7 +124,52 @@ impl Drop for Request {
 /// background.
 pub struct Delivered(Request);
 
+/// The handles that [`Delivered::run_in_wait_until`] runs its function on.
+pub struct Handler<'s> {
+    /// The event's exported handler, or undefined if there is none, as under Service Workers
+    /// syntax.
+    pub handler: v8::Local<'s, v8::Value>,
+    /// The Worker's env, or undefined if there is no exported handler.
+    pub env: v8::Local<'s, v8::Value>,
+    /// The handler's ctx, or undefined if it has none.
+    pub ctx: v8::Local<'s, v8::Value>,
+}
+
 impl Delivered {
+    /// Runs `f` on the event's [`Handler`] in a waitUntil task of the request, with
+    /// [`io_context::incoming_request_run_in_wait_until`], under the Perfetto span `span_name`,
+    /// then waits for the future that `f` returns. The handler is found first, in the task, by the
+    /// C++ function `entrypoint::getHandlerHandles()`, as the run's C++ prelude, before Rust holds
+    /// the lock: the task fails with what finding it throws, as when a class entrypoint's
+    /// constructor throws, as it does in C++.
+    ///
+    /// # Errors
+    /// Fails with the exception that keeps the task from being added. The request then finishes
+    /// in the background.
+    pub fn run_in_wait_until<F>(
+        mut self,
+        span_name: &'static CStr,
+        f: impl for<'s> FnOnce(&mut jsg::Lock<'s>, Handler<'s>) -> Result<F, RunError> + 'static,
+    ) -> Result<Running, KjException>
+    where
+        F: Future<Output = Result<(), KjException>> + 'static,
+    {
+        let invocation = self.0.invocation_mut();
+        let lookup = bridge::invocation_take_handler_lookup(invocation.pin_mut());
+        io_context::incoming_request_run_in_wait_until(
+            ffi::request(invocation.pin_mut()),
+            span_name,
+            lookup,
+            move |lock, handles| {
+                let &[handler, env, ctx] = handles else {
+                    unreachable!("the handler lookup returns the handler, env and ctx")
+                };
+                f(lock, Handler { handler, env, ctx })
+            },
+        )?;
+        Ok(Running(self.0))
+    }
+
     /// Starts the event's scheduled handler with a `ScheduledEvent` for `scheduled_time` and
     /// `cron`, in a waitUntil task of the request, with the C++ function that
     /// `WorkerEntrypoint::runScheduled()` also calls, `entrypoint::startScheduledInWaitUntil()`:

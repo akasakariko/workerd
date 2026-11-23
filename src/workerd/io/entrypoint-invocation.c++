@@ -30,4 +30,25 @@ void startScheduledInWaitUntil(IoContext& context,
   }));
 }
 
+HandlerHandles getHandlerHandles(Worker::Lock& lock, IoContext& context, HandlerLookup lookup) {
+  jsg::Lock& js = lock;
+  HandlerHandles handles{
+    .handler = js.v8Undefined(),
+    .env = js.v8Undefined(),
+    .ctx = js.v8Undefined(),
+  };
+  KJ_IF_SOME(h,
+      lock.getExportedHandler(
+          lookup.entrypointName.map([](kj::String& name) -> kj::StringPtr { return name; }),
+          kj::mv(lookup.versionInfo), kj::mv(lookup.props), context.getActor())) {
+    // The handles stay valid in the lock's HandleScope once the ExportedHandler is gone.
+    handles.handler = h->self.getHandle(js);
+    handles.env = h->env.getHandle(js);
+    KJ_IF_SOME(c, h->getCtx()) {
+      handles.ctx = lock.getWorker().getIsolate().getApi().wrapExecutionContext(js, kj::mv(c));
+    }
+  }
+  return handles;
+}
+
 }  // namespace workerd::entrypoint
