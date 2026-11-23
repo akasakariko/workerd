@@ -550,6 +550,103 @@ KJ_TEST("an await_io_and_run() future that panics fails the task, and its callba
   fixture.drainAndDestroy(kj::mv(request));
 }
 
+KJ_TEST("run_in_wait_until() runs its prelude, its function on the handles, then its future") {
+  TestFixture fixture;
+  auto context = fixture.newIoContext();
+  auto request = fixture.newIncomingRequest(*context);
+  awaitContextId = kj::none;
+  run_in_wait_until(*request, RunEnding::Succeed);
+  // The function runs in IoContext::run(), which waits for the isolate lock.
+  KJ_EXPECT(run_observation() == AwaitObservation::Pending);
+  fixture.pollEventLoop();
+  KJ_EXPECT(run_observation() == AwaitObservation::Ran);
+  KJ_EXPECT(KJ_ASSERT_NONNULL(awaitContextId) == idOf(*context));
+  KJ_EXPECT(run_handle() == 42);
+  KJ_EXPECT(run_future_done());
+  KJ_EXPECT(context->waitUntilStatus() == EventOutcome::OK);
+  fixture.drainAndDestroy(kj::mv(request));
+}
+
+KJ_TEST("a run_in_wait_until() prelude that throws fails the task, and the function is dropped") {
+  TestFixture fixture;
+  auto context = fixture.newIoContext();
+  auto request = fixture.newIncomingRequest(*context);
+  run_in_wait_until(*request, RunEnding::PreludeThrows);
+  fixture.pollEventLoop();
+  KJ_EXPECT(run_observation() != AwaitObservation::Ran);
+  KJ_EXPECT(context->waitUntilStatus() == EventOutcome::EXCEPTION);
+  fixture.drainAndDestroy(kj::mv(request));
+  KJ_EXPECT(run_observation() == AwaitObservation::Dropped);
+}
+
+KJ_TEST("a run_in_wait_until() function that throws fails the task") {
+  TestFixture fixture;
+  auto context = fixture.newIoContext();
+  auto request = fixture.newIncomingRequest(*context);
+  run_in_wait_until(*request, RunEnding::Throw);
+  fixture.pollEventLoop();
+  KJ_EXPECT(run_observation() == AwaitObservation::Ran);
+  KJ_EXPECT(!run_future_done());
+  KJ_EXPECT(context->waitUntilStatus() == EventOutcome::EXCEPTION);
+  fixture.drainAndDestroy(kj::mv(request));
+}
+
+KJ_TEST("a run_in_wait_until() function that fails with a KJ exception fails the task") {
+  TestFixture fixture;
+  auto context = fixture.newIoContext();
+  auto request = fixture.newIncomingRequest(*context);
+  run_in_wait_until(*request, RunEnding::FailWithKj);
+  fixture.pollEventLoop();
+  KJ_EXPECT(run_observation() == AwaitObservation::Ran);
+  KJ_EXPECT(!run_future_done());
+  KJ_EXPECT(context->waitUntilStatus() == EventOutcome::EXCEPTION);
+  fixture.drainAndDestroy(kj::mv(request));
+}
+
+KJ_TEST("a run_in_wait_until() function that panics terminates execution and fails the task") {
+  TestFixture fixture;
+  auto context = fixture.newIoContext();
+  auto request = fixture.newIncomingRequest(*context);
+  run_in_wait_until(*request, RunEnding::PanicInFunction);
+  {
+    KJ_EXPECT_LOG(
+        ERROR, "the function of IoContext::IncomingRequest::run_in_wait_until() panicked");
+    KJ_EXPECT_LOG(ERROR, "internalMessage = the function panicked");
+    fixture.pollEventLoop();
+  }
+  KJ_EXPECT(run_observation() == AwaitObservation::Ran);
+  KJ_EXPECT(context->waitUntilStatus() == EventOutcome::EXCEPTION);
+  fixture.drainAndDestroy(kj::mv(request));
+}
+
+KJ_TEST("a run_in_wait_until() future that panics fails the task") {
+  TestFixture fixture;
+  auto context = fixture.newIoContext();
+  auto request = fixture.newIncomingRequest(*context);
+  run_in_wait_until(*request, RunEnding::PanicInFuture);
+  {
+    KJ_EXPECT_LOG(ERROR, "the future of IoContext::IncomingRequest::run_in_wait_until() panicked");
+    fixture.pollEventLoop();
+  }
+  KJ_EXPECT(run_observation() == AwaitObservation::Ran);
+  KJ_EXPECT(!run_future_done());
+  KJ_EXPECT(context->waitUntilStatus() == EventOutcome::EXCEPTION);
+  fixture.drainAndDestroy(kj::mv(request));
+}
+
+KJ_TEST("run_in_wait_until() drops its function unrun when the request is destroyed first") {
+  TestFixture fixture;
+  auto request = fixture.newIncomingRequest();
+  run_in_wait_until(*request, RunEnding::Succeed);
+  {
+    KJ_EXPECT_LOG(WARNING, "failed to invoke drain() on IncomingRequest before destroying it");
+    request = nullptr;
+  }
+  KJ_EXPECT(run_observation() == AwaitObservation::Dropped);
+  fixture.pollEventLoop();
+  KJ_EXPECT(run_observation() == AwaitObservation::Dropped);
+}
+
 // How the promise of the last await_promise() or await_value() has settled. It is read in a
 // request of its own: the one that awaited may have nothing left to wait for, and be aborted.
 kj::String awaitedOutcome(TestFixture& fixture) {

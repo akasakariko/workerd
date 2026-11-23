@@ -10,6 +10,7 @@
 #include <workerd/jsg/inspector.h>
 #include <workerd/rust/jsg/ffi-inl.h>
 #include <workerd/rust/worker/bridge.h>
+#include <workerd/util/use-perfetto-categories.h>
 
 #include <v8-inspector.h>
 
@@ -21,15 +22,30 @@
 
 namespace workerd::io_context {
 
+namespace {
+
+// The NUL-terminated string that `bytes` holds with its NUL, for a name that Rust passes as the
+// bytes of a `&'static CStr`. `what` names it in the exception for bytes that aren't one.
+kj::StringPtr staticName(::rust::Slice<const kj::byte> bytes, kj::StringPtr what) {
+  // A kj::StringPtr needs a NUL right after its text and none within it. A CStr's bytes with its
+  // NUL meet both, but this doesn't rely on that.
+  auto all = kj::arrayPtr(bytes.data(), bytes.size());
+  KJ_REQUIRE(all.size() > 0 && all.back() == '\0', kj::str(what, " is not NUL-terminated"));
+  auto text = all.first(all.size() - 1);
+  KJ_REQUIRE(text.findFirst('\0') == kj::none, kj::str(what, " contains a NUL"));
+  return kj::StringPtr(text.asChars().begin(), text.size());
+}
+
+}  // namespace
+
 void incoming_request_delivered(IncomingRequest& request, ::rust::Slice<const kj::byte> eventType) {
-  // A kj::StringPtr needs a NUL right after its text and none within it. Rust passes a CStr's
-  // bytes with its NUL (see incoming_request_delivered() in ffi.rs), which meet both, but this
-  // doesn't rely on that.
-  auto bytes = kj::arrayPtr(eventType.data(), eventType.size());
-  KJ_REQUIRE(bytes.size() > 0 && bytes.back() == '\0', "the event type is not NUL-terminated");
-  auto text = bytes.first(bytes.size() - 1);
-  KJ_REQUIRE(text.findFirst('\0') == kj::none, "the event type contains a NUL");
-  request.delivered(kj::StringPtr(text.asChars().begin(), text.size()));
+  request.delivered(staticName(eventType, "the event type"));
+}
+
+void incoming_request_set_custom_event_info(IncomingRequest& request) {
+  KJ_IF_SOME(tracer, request.getWorkerTracer()) {
+    tracer.setEventInfo(request, tracing::CustomEventInfo());
+  }
 }
 
 void incoming_request_set_scheduled_event_info(
@@ -246,6 +262,41 @@ void io_context_await_io_and_run(
     }
     KJ_UNREACHABLE;
   });
+}
+
+void incoming_request_run_in_wait_until(IncomingRequest& request,
+    ::rust::Slice<const kj::byte> spanName,
+    kj::Own<RunPrelude> prelude,
+    ::rust::Box<WaitUntilRun> run) {
+  auto name = staticName(spanName, "the span name");
+  auto& context = request.getContext();
+  // `name` is the text of a Rust `&'static CStr`, which lives as long as the process.
+  // NOLINTBEGIN(workerd-unsafe-continuation-capture)
+  context.addWaitUntil(
+      context.run([name, prelude = kj::mv(prelude), run = kj::mv(run)](
+                      Worker::Lock& lock, IoContext& context) mutable -> kj::Promise<void> {
+    // Used only in Perfetto builds.
+    (void)name;
+    TRACE_EVENT("workerd", perfetto::StaticString(name.cStr()));
+    auto traceScope = context.makeRequestTraceScope(lock);
+    auto handles = prelude->run(lock, context);
+    auto ffiHandles =
+        KJ_MAP(handle, handles) { return ::workerd::rust::jsg::to_ffi(kj::mv(handle)); };
+    switch (wait_until_run_start(reinterpret_cast<uintptr_t>(lock.getIsolate()), *run,
+        ::rust::Slice<const ::workerd::rust::jsg::Local>(ffiHandles.begin(), ffiHandles.size()))) {
+      case IoCallbackOutcome::Succeeded:
+        return wait_until_run_wait(kj::mv(run));
+      case IoCallbackOutcome::Failed:
+        // As in io_context_await_io_and_run(): run() logs the exception as uncaught and fails
+        // the task with it.
+        throwPendingToRun();
+      case IoCallbackOutcome::Panicked:
+        // As in io_context_await_io_and_run().
+        KJ_FAIL_ASSERT("the function of IoContext::IncomingRequest::run_in_wait_until() panicked");
+    }
+    KJ_UNREACHABLE;
+  }));
+  // NOLINTEND(workerd-unsafe-continuation-capture)
 }
 
 ReentryCallback::ReentryCallback(IoContext& context, ::rust::Box<ReentryFn> function)

@@ -34,6 +34,36 @@ void incoming_request_delivered(IncomingRequest& request, ::rust::Slice<const kj
 void incoming_request_set_scheduled_event_info(
     IncomingRequest& request, kj::Date scheduledTime, ::rust::Slice<const kj::byte> cron);
 
+// Tells the request's tracer, if it has one, that the event is a custom event.
+void incoming_request_set_custom_event_info(IncomingRequest& request);
+
+// Rust type, defined in ffi.rs.
+struct WaitUntilRun;
+
+// The C++ work that a run in a waitUntil task does in IoContext::run() before it calls Rust, as a
+// C++ event's lambda finds the exported handler before it calls it. run() returns the handles that
+// the Rust function receives, in the lock's HandleScope. An exception that it throws fails the run
+// as one that C++ code run() runs throws: a JavaScript exception, left pending, is logged as
+// uncaught. Rust holds no lock while it runs.
+class RunPrelude {
+ public:
+  virtual ~RunPrelude() noexcept(false) = default;
+  virtual kj::Array<v8::Local<v8::Value>> run(Worker::Lock& lock, IoContext& context) = 0;
+};
+
+// context.addWaitUntil(context.run(...)) on the request's IoContext, as C++ starts an event's
+// handler: in IoContext::run(), under a Perfetto span named `spanName` and in the request's trace
+// scope, runs `prelude`, then the function of `run` on the handles that `prelude` returned, then
+// waits for the future that the function returned. `spanName` is passed as `eventType` is to
+// incoming_request_delivered(). The task fails with the exception that `prelude` throws, with the
+// exception that the function leaves pending, which run() logs as uncaught, with the KJ exception
+// it fails with, unchanged, or with the exception of its future. If the function panics, the task
+// fails with a KJ exception.
+void incoming_request_run_in_wait_until(IncomingRequest& request,
+    ::rust::Slice<const kj::byte> spanName,
+    kj::Own<RunPrelude> prelude,
+    ::rust::Box<WaitUntilRun> run);
+
 // IoContext::IncomingRequest::drain(waitUntilTasks, request).
 void incoming_request_drain(kj::Own<IncomingRequest> request, kj::TaskSet& waitUntilTasks);
 
