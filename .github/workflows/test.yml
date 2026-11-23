@@ -157,7 +157,7 @@ jobs:
             bazel-config: release_macos_cross_x86_64
             target-arch: X64
           - title: macOS-arm64
-            bazel-config: release_macos
+            bazel-config: release_macos_arm64
             target-arch: ARM64
       fail-fast: false
     name: TEMPORARY release build (${{ matrix.title }})
@@ -261,7 +261,7 @@ jobs:
           if [ "$BAZELFLARE" = true ]; then
             bazel build --config=bazelflare --config=ci --config=ci-bazelflare --config=ci-download-types //types
           else
-            bazel build --strip=always --remote_cache=https://bazel:${{ secrets.BAZEL_CACHE_KEY }}@bazel-remote-cache.devprod.cloudflare.dev --config=ci --config=release_linux-without-pgo //types
+            bazel build --strip=always --remote_cache=https://bazel:${{ secrets.BAZEL_CACHE_KEY }}@bazel-remote-cache.devprod.cloudflare.dev --config=ci --config=release_linux-without-pgo --config=x64-release //types
           fi
       - name: Check snapshot diff
         run: |
