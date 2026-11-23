@@ -370,7 +370,7 @@ class Socket: public jsg::Object {
     JSG_READONLY_PROTOTYPE_PROPERTY(opened, getOpened);
     JSG_READONLY_PROTOTYPE_PROPERTY(upgraded, getUpgraded);
     JSG_READONLY_PROTOTYPE_PROPERTY(secureTransport, getSecureTransport);
-    if (flags.getWorkerdExperimental()) {
+    if (flags.getUdpIngress()) {
       // non-standard extension, not part of the proposed sockets spec
       JSG_READONLY_PROTOTYPE_PROPERTY(protocol, getProtocol);
       JSG_TS_OVERRIDE({

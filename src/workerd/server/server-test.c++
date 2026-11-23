@@ -929,7 +929,7 @@ KJ_TEST("Server: UDP listener survives connect() handler exceptions") {
       name = "worker",
       worker = (
         compatibilityDate = "2024-01-01",
-        compatibilityFlags = ["experimental"],
+        compatibilityFlags = ["udp_ingress"],
         modules = [(
           name = "worker.js",
           esModule =
@@ -951,7 +951,6 @@ KJ_TEST("Server: UDP listener survives connect() handler exceptions") {
     )]
   ))"_kj);
 
-  test.server.allowExperimental();
   test.start();
 
   // The second flow is only served if the server survived the first exception.
@@ -7224,7 +7223,7 @@ KJ_TEST("Server: UDP RPC over HTTP connections") {
       ( name = "worker",
         worker = (
           compatibilityDate = "2024-02-23",
-          compatibilityFlags = ["experimental"],
+          compatibilityFlags = ["udp_ingress"],
           modules = [(
             name = "main.js",
             esModule =
@@ -7246,7 +7245,6 @@ KJ_TEST("Server: UDP RPC over HTTP connections") {
     ]
   ))"_kj);
 
-  test.server.allowExperimental();
   test.start();
 
   test.sendUdp("udp-address", "peer:1234", "hello"_kjb);

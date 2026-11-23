@@ -1133,7 +1133,7 @@ class ServiceWorkerGlobalScope: public WorkerGlobalScope {
       JSG_NESTED_TYPE(IdentityTransformStream);
     }
     JSG_NESTED_TYPE(HTMLRewriter);
-    if (flags.getWorkerdExperimental()) {
+    if (flags.getUdpIngress()) {
       JSG_NESTED_TYPE(Datagram);
     }
 
