@@ -38,6 +38,10 @@ namespace workerd {
 
 static_assert(jsg::SERIALIZATION_TAG_JS_SERIALIZABLE ==
     static_cast<uint32_t>(rpc::SerializationTag::JS_SERIALIZABLE));
+static_assert(jsg::SERIALIZATION_TAG_DOM_EXCEPTION_V3 ==
+    static_cast<uint32_t>(rpc::SerializationTag::DOM_EXCEPTION_V3));
+static_assert(jsg::SERIALIZATION_TAG_QUOTA_EXCEEDED_ERROR ==
+    static_cast<uint32_t>(rpc::SerializationTag::QUOTA_EXCEEDED_ERROR));
 
 namespace {
 
@@ -670,7 +674,6 @@ jsg::JsRef<jsg::JsObject> createUtilsObject(jsg::Lock& js) {
     "legacyUrlPatternProcessInit",
     "mimeTypeEssence",
     "readableStreamState",
-    "DOMExceptionBase",
     "structuredClone",
   };
   auto tmpl = v8::DictionaryTemplate::New(js.v8Isolate, names);
@@ -715,7 +718,6 @@ jsg::JsRef<jsg::JsObject> createUtilsObject(jsg::Lock& js) {
     getMethod(js, LegacyUrlPatternProcessInit),
     getMethod(js, MimeTypeEssence),
     getMethod(js, ReadableStreamState),
-    v8::Local<v8::Value>(jsg::getBootstrapDomExceptionBase(js)),
     getMethod(js, StructuredClone),
   };
 
