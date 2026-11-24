@@ -109,14 +109,16 @@ bazel build --config=thin-lto //src/workerd/server:workerd
 `workerd` is configured using a config file written in Cap'n Proto text format.
 
 For simple projects, `workerd serve wrangler.jsonc` also accepts a Wrangler
-config. `main` is bundled with esbuild, as Wrangler does. The supported fields
-are `name`, `main`, `compatibility_date`, `compatibility_flags`, `vars`,
-`durable_objects`, `exports`, `migrations`, `no_bundle`, `$schema` and, with
-`--experimental`, `kv_namespaces`, `triggers.crons`, `queues`, `workflows`,
-`d1_databases` and `assets`; any other field is an error. With `assets`, `main`
-may be left out to serve files only, and then fields that need a Worker are an
-error. Each KV namespace and each D1 database is one Durable Object, so its
-throughput is that of one object.
+config. Given a project directory, as in `workerd serve .`, it serves the
+directory's `wrangler.json`, else its `wrangler.jsonc`. `main` is bundled with
+esbuild, as Wrangler does, unless the config sets `"no_bundle": true`. The
+supported fields are `name`, `main`, `compatibility_date`,
+`compatibility_flags`, `vars`, `durable_objects`, `exports`, `migrations`,
+`no_bundle`, `$schema` and, with `--experimental`, `kv_namespaces`,
+`triggers.crons`, `queues`, `workflows`, `d1_databases` and `assets`; any other
+field is an error. With `assets`, `main` may be left out to serve files only,
+and then fields that need a Worker are an error. Each KV namespace and each D1
+database is one Durable Object, so its throughput is that of one object.
 
 A simple "Hello World!" config file might look like:
 

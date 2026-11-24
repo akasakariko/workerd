@@ -469,15 +469,15 @@ fn load_config<T: CommandFactory>(
     if config_file == "-" {
         usage_error::<T>("-: Reading config from stdin is only allowed with --binary.");
     }
-    if wrangler::is_wrangler_config(&config_file) {
+    if let Some(path) =
+        wrangler::named_config(&config_file).unwrap_or_else(|error| usage_error::<T>(error))
+    {
         if let Some(name) = const_name {
             usage_error::<T>(format!("{name}: A wrangler config has no named constants."));
         }
-        if !std::path::Path::new(&config_file).is_file() {
-            usage_error::<T>(format!("{config_file}: No such file."));
-        }
-        return wrangler::load(&config_file, process, experimental)
-            .unwrap_or_else(|error| config_errors(&[format!("{config_file}: {error}")], process));
+        let path = path.to_string_lossy();
+        return wrangler::load(&path, process, experimental)
+            .unwrap_or_else(|error| config_errors(&[format!("{path}: {error}")], process));
     }
 
     let compiled = ffi::compile_config(

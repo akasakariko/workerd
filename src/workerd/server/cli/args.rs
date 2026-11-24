@@ -301,8 +301,10 @@ pub struct ConfigFileArgs {
     #[arg(short, long)]
     pub binary: bool,
 
-    /// A Cap'n Proto config (`.capnp`), or a `wrangler.json` / `wrangler.jsonc`, whose `main` is
-    /// bundled with esbuild as `wrangler` does.
+    /// A Cap'n Proto config (`.capnp`), a `wrangler.json` / `wrangler.jsonc`, or a wrangler
+    /// project directory, whose `wrangler.json`, else `wrangler.jsonc`, is used. A wrangler
+    /// config's `main` is bundled with esbuild as `wrangler` does, unless it sets
+    /// `"no_bundle": true`.
     #[arg(value_name = "config-file")]
     pub config_file: String,
 }
