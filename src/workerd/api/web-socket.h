@@ -245,6 +245,10 @@ class WebSocket: public EventTarget {
   void internalAccept(jsg::Lock& js, kj::Maybe<kj::Rc<InputGate::CriticalSection>> cs);
 
   void send(jsg::Lock& js, kj::OneOf<kj::Array<byte>, kj::String> message);
+
+  // send() as exposed to JavaScript under the websocket_send_blob compat flag.
+  void sendWithBlob(jsg::Lock& js, kj::OneOf<kj::Array<byte>, jsg::Ref<Blob>, kj::String> message);
+
   void close(jsg::Lock& js, jsg::Optional<int> code, jsg::Optional<jsg::USVString> reason);
 
   // Used to get/set the attachment for hibernation.
@@ -307,7 +311,11 @@ class WebSocket: public EventTarget {
   JSG_RESOURCE_TYPE(WebSocket, CompatibilityFlags::Reader flags) {
     JSG_INHERIT(EventTarget);
     JSG_METHOD(accept);
-    JSG_METHOD(send);
+    if (flags.getWebsocketSendBlob()) {
+      JSG_METHOD_NAMED(send, sendWithBlob);
+    } else {
+      JSG_METHOD(send);
+    }
     JSG_METHOD(close);
     JSG_METHOD(serializeAttachment);
     JSG_METHOD(deserializeAttachment);

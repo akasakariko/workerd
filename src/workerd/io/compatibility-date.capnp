@@ -1879,4 +1879,11 @@ struct CompatibilityFlags @0x8f8c1b68151b6cef {
   # it carries plaintext between the peer and the handler. A handler that returns, throws or
   # closes its socket before calling accept() fails the connection, and the peer's `opened`
   # rejects. Without the flag, such connections are refused before the handler runs.
+
+  websocketSendBlob @210 :Bool
+      $compatEnableFlag("websocket_send_blob")
+      $compatDisableFlag("websocket_send_legacy_blob");
+  # Makes `WebSocket.send()` take a Blob, as the WHATWG WebSockets spec requires, and send its
+  # bytes as a binary message, in order with the other messages sent. Without the flag a Blob is
+  # converted to a string, so it is sent as a text message such as "[object Blob]".
 }

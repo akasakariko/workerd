@@ -137,6 +137,24 @@ void WebSocket::send(jsg::Lock& js, kj::OneOf<kj::Array<byte>, kj::String> messa
   impl->send(js, kj::mv(message));
 }
 
+void WebSocket::sendWithBlob(
+    jsg::Lock& js, kj::OneOf<kj::Array<byte>, jsg::Ref<Blob>, kj::String> message) {
+  KJ_SWITCH_ONEOF(message) {
+    KJ_CASE_ONEOF(data, kj::Array<byte>) {
+      send(js, kj::mv(data));
+    }
+    KJ_CASE_ONEOF(blob, jsg::Ref<Blob>) {
+      // The spec reads the Blob asynchronously but sends it in order with the other send() calls.
+      // A Blob's bytes are always in memory, so copying them now and queuing them like any other
+      // binary message keeps that order.
+      send(js, kj::heapArray(blob->getData(js)));
+    }
+    KJ_CASE_ONEOF(text, kj::String) {
+      send(js, kj::mv(text));
+    }
+  }
+}
+
 void WebSocket::close(
     jsg::Lock& js, jsg::Optional<int> code, jsg::Optional<jsg::USVString> reason) {
   impl->close(js, kj::mv(code), kj::mv(reason));
