@@ -1879,4 +1879,18 @@ struct CompatibilityFlags @0x8f8c1b68151b6cef {
   # it carries plaintext between the peer and the handler. A handler that returns, throws or
   # closes its socket before calling accept() fails the connection, and the peer's `opened`
   # rejects. Without the flag, such connections are refused before the handler runs.
+
+  userTimingErrorsStandard @210 :Bool
+      $compatEnableFlag("user_timing_errors_standard")
+      $compatDisableFlag("user_timing_errors_legacy")
+      $compatEnableDate("2027-01-05");
+  # Makes `performance.mark()`, the `PerformanceMark` constructor and `performance.measure()` follow
+  # the User Timing spec for their arguments. A negative `startTime`, `start`, `end` or `duration`
+  # throws a TypeError. `measure()` throws a TypeError for an options object that is combined with
+  # an end mark, that has neither `start` nor `end`, or that has all of `start`, `end` and
+  # `duration`. A mark name that has no mark throws a SyntaxError DOMException, and a
+  # `PerformanceTiming` attribute name such as `navigationStart` throws a TypeError, because a
+  # Worker has no navigation timing. Options with `end` and `duration` but no `start` start the
+  # measure at `end - duration`. Without the flag, all of these calls succeed, a missing mark
+  # measures from 0 or to the current time, and `{ end, duration }` starts the measure at 0.
 }
