@@ -391,14 +391,11 @@ if (autogates['ts-structured-clone']) {
   });
 }
 
-// Internal-only: cloneable classes for testing the serialization protocol
+// Internal-only: a cloneable class for testing the serialization protocol
 // (serialization.ts), such as over RPC. Gated by an experimental flag that
 // may never lose its experimental annotation.
 if (compatFlags['expose_serialization_test_class']) {
-  const {
-    CloneableTestBox,
-    CloneableTestError,
-  } = require('testing/cloneable-test-box');
+  const { CloneableTestBox } = require('testing/cloneable-test-box');
   ObjectDefineProperties(globalThis, {
     CloneableTestBox: {
       __proto__: null,
@@ -406,13 +403,6 @@ if (compatFlags['expose_serialization_test_class']) {
       enumerable: false,
       writable: true,
       value: CloneableTestBox,
-    },
-    CloneableTestError: {
-      __proto__: null,
-      configurable: true,
-      enumerable: false,
-      writable: true,
-      value: CloneableTestError,
     },
   });
 }
