@@ -9,6 +9,7 @@ def kj_test(
         deps = [],
         tags = [],
         size = "medium",
+        shard_count = None,
         target_compatible_with = None,
         **kwargs):
     test_name = src.removesuffix(".c++")
@@ -38,6 +39,7 @@ def kj_test(
         data = data,
         tags = tags,
         size = size,
+        shard_count = shard_count,
         exec_properties = test_exec_properties(size, tags),
         target_compatible_with = target_compatible_with,
     )
@@ -50,6 +52,7 @@ def kj_test(
         # Tag with no-coverage to reduce coverage CI time
         tags = tags + ["no-coverage"],
         size = size,
+        shard_count = shard_count,
         exec_properties = test_exec_properties(size, tags),
         target_compatible_with = target_compatible_with,
     )
