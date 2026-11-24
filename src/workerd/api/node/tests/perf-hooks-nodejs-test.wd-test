@@ -10,5 +10,14 @@ const unitTests :Workerd.Config = (
         compatibilityFlags = ["nodejs_compat", "nodejs_compat_v2", "enable_nodejs_perf_hooks_module"],
       )
     ),
+    ( name = "perf-hooks-clone-detail-test",
+      worker = (
+        modules = [
+          (name = "worker", esModule = embed "perf-hooks-clone-detail-test.js")
+        ],
+        compatibilityFlags = ["nodejs_compat", "nodejs_compat_v2", "enable_nodejs_perf_hooks_module",
+                              "user_timing_detail_standard"],
+      )
+    ),
   ],
 );

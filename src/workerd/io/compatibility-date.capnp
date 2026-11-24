@@ -1877,4 +1877,13 @@ struct CompatibilityFlags @0x8f8c1b68151b6cef {
   # it carries plaintext between the peer and the handler. A handler that returns, throws or
   # closes its socket before calling accept() fails the connection, and the peer's `opened`
   # rejects. Without the flag, such connections are refused before the handler runs.
+
+  userTimingCloneDetail @210 :Bool
+      $compatEnableFlag("user_timing_detail_standard")
+      $compatDisableFlag("user_timing_detail_legacy")
+      $compatEnableDate("2026-12-22");
+  # `performance.mark()`, `performance.measure()` and the `PerformanceMark` constructor store a
+  # structured clone of `detail`, as the User Timing spec requires, instead of the value passed in.
+  # Changing the original afterwards no longer changes the entry's `detail`, and a `detail` that
+  # can't be cloned, such as a function or a Symbol, throws a DataCloneError and records no entry.
 }
