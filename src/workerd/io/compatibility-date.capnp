@@ -1877,4 +1877,13 @@ struct CompatibilityFlags @0x8f8c1b68151b6cef {
   # it carries plaintext between the peer and the handler. A handler that returns, throws or
   # closes its socket before calling accept() fails the connection, and the peer's `opened`
   # rejects. Without the flag, such connections are refused before the handler runs.
+
+  consoleLabelConversion @210 :Bool
+      $compatEnableFlag("console_label_conversion_standard")
+      $compatDisableFlag("console_label_conversion_legacy");
+  # `console.count()`, `countReset()`, `time()`, `timeLog()` and `timeEnd()` convert a label other
+  # than `undefined` to a string before anything else, as the Console spec requires, and rethrow
+  # what the conversion throws. An object label's `toString()` is called, and a Symbol label throws
+  # a TypeError. Without the flag, the label is converted only when an inspector is attached, and
+  # errors from converting it are dropped.
 }
