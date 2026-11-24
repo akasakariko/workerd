@@ -639,17 +639,36 @@ function captureJsgGetter<T>(proto: object, name: string): T {
 }
 
 // Container populated and frozen per context by primordials.ts with captures of
-// the JSG runtime built-ins from that context's globalThis. Modules pre-evaluated
-// in a process-wide baseline snapshot read JSG primordials through this object at
-// call time rather than destructuring them at module load time.
-const jsg: Record<string, unknown> = ObjectCreate(null) as Record<
-  string,
-  unknown
->;
+// the JSG runtime built-ins from that context's globalThis. Pre-declaring all
+// keys in the baseline snapshot fixes its hidden class so per-context wiring
+// writes slots in place with zero map transitions, and setting its prototype to
+// `jsExports` lets primordials.ts export `jsg` directly without copying all
+// pure-JS captures on every isolate startup.
+const jsg: Record<string, unknown> = {
+  AbortController: undefined,
+  AbortSignal: undefined,
+  EventTarget: undefined,
+  TextDecoder: undefined,
+  TextEncoder: undefined,
+  BlobPrototypeSlice: undefined,
+  EventTargetPrototype: undefined,
+  EventTargetAddEventListener: undefined,
+  EventTargetRemoveEventListener: undefined,
+  AbortControllerCtor: undefined,
+  AbortControllerAbort: undefined,
+  AbortControllerSignalGet: undefined,
+  AbortSignalAbortedGet: undefined,
+  AbortSignalReasonGet: undefined,
+  TextDecoderEncodingGet: undefined,
+  TextDecoderFatalGet: undefined,
+  TextDecoderIgnoreBOMGet: undefined,
+  TextEncoderEncode: undefined,
+  TextDecoderDecode: undefined,
+};
 
 // Freeze the exports object to prevent accidental mutation by bootstrap scripts.
 // Uses the captured ObjectFreeze, not the potentially-polluted global.
-module.exports = ObjectFreeze({
+const jsExports = {
   // Per-context JSG built-in captures (populated and frozen by primordials.ts)
   jsg,
 
@@ -834,4 +853,10 @@ module.exports = ObjectFreeze({
   SafeWeakMap,
   SafeWeakSet,
   SafeArrayIterator,
-});
+};
+
+ObjectSetPrototypeOf(jsExports, null);
+ObjectFreeze(jsExports);
+ObjectSetPrototypeOf(jsg, jsExports);
+
+module.exports = jsExports;

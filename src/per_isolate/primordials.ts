@@ -84,29 +84,9 @@ const TextDecoderIgnoreBOMGet = captureJsgGetter<
 >(TextDecoderCtor.prototype, 'ignoreBOM');
 
 // Populate and freeze the live JSG primordials container shared with modules
-// pre-evaluated in a process-wide baseline snapshot.
-const jsgEntries = {
-  AbortController: AbortControllerCtor,
-  AbortSignal: AbortSignalCtor,
-  EventTarget: EventTargetCtor,
-  TextDecoder: TextDecoderCtor,
-  TextEncoder: TextEncoderCtor,
-  BlobPrototypeSlice,
-  EventTargetPrototype,
-  EventTargetAddEventListener,
-  EventTargetRemoveEventListener,
-  AbortControllerCtor,
-  AbortControllerAbort,
-  AbortControllerSignalGet,
-  AbortSignalAbortedGet,
-  AbortSignalReasonGet,
-  TextDecoderEncodingGet,
-  TextDecoderFatalGet,
-  TextDecoderIgnoreBOMGet,
-  TextEncoderEncode,
-  TextDecoderDecode,
-};
-
+// pre-evaluated in a process-wide baseline snapshot. Its prototype is already
+// `jsPrimordials` (frozen, null-terminated), so exporting `jsgPrimordials`
+// exposes both the JSG and pure-JS primordials without copying 140+ properties.
 jsgPrimordials['AbortController'] = AbortControllerCtor;
 jsgPrimordials['AbortSignal'] = AbortSignalCtor;
 jsgPrimordials['EventTarget'] = EventTargetCtor;
@@ -129,9 +109,4 @@ jsgPrimordials['TextEncoderEncode'] = TextEncoderEncode;
 jsgPrimordials['TextDecoderDecode'] = TextDecoderDecode;
 ObjectFreeze(jsgPrimordials);
 
-// Freeze the exports object to prevent accidental mutation by bootstrap scripts.
-// Uses the captured ObjectFreeze, not the potentially-polluted global.
-module.exports = ObjectFreeze({
-  ...jsPrimordials,
-  ...jsgEntries,
-});
+module.exports = jsgPrimordials;
