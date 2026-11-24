@@ -109,10 +109,17 @@ struct BootstrapState final: public jsg::BootstrapModules {
         moduleSource(moduleSource) {}
 
   kj::Maybe<jsg::JsValue> tryGetLoadedExports(jsg::Lock& js, kj::StringPtr specifier) override {
-    // The cache is populated by require() calls. If the module was never required, it won't be
-    // in the cache and we return none.
-    KJ_IF_SOME(cached, cache.find(normalizeSpecifier(specifier))) {
+    auto normalized = normalizeSpecifier(specifier);
+    // Check per-context additions first, then the stashed cache object from a snapshot (avoids
+    // copying every stashed entry into `cache` at startup).
+    KJ_IF_SOME(cached, cache.find(normalized)) {
       return cached.getHandle(js);
+    }
+    KJ_IF_SOME(stashed, stashedCache) {
+      auto obj = stashed.getHandle(js);
+      if (obj.has(js, normalized)) {
+        return obj.get(js, normalized);
+      }
     }
     return kj::none;
   }
@@ -127,11 +134,19 @@ struct BootstrapState final: public jsg::BootstrapModules {
   // `embedder`.
   const jsg::ModuleSource* moduleSource;
   kj::HashMap<kj::String, jsg::JsRef<jsg::JsValue>> cache;
-  // Pre-compiled bootstrap script functions restored from a baseline snapshot (specifier -> fn).
+  // Stashed require() cache object restored from a baseline or per-worker snapshot, looked up on
+  // demand without copying every entry into `cache`.
+  kj::Maybe<jsg::JsRef<jsg::JsObject>> stashedCache;
+  // Pre-compiled bootstrap script functions restored from a baseline snapshot (specifier -> fn),
+  // looked up on demand.
+  kj::Maybe<jsg::JsRef<jsg::JsObject>> stashedCompiledScripts;
+  // Pre-compiled bootstrap script functions accumulated while building a baseline snapshot.
   kj::HashMap<kj::String, jsg::JsRef<jsg::JsFunction>> compiledScripts;
   // Functions found by tryGetBootstrapFunction(), by module specifier, then name.
   kj::HashMap<kj::String, kj::HashMap<kj::String, jsg::JsRef<jsg::JsFunction>>> functionCache;
   kj::HashSet<kj::String> loading;
+  // True while building a baseline snapshot so compileBootstrapScript() uses kEagerCompile.
+  bool eagerCompile = false;
   // None during baseline snapshot preload so any accidental compatFlags access fails loudly.
   kj::Maybe<jsg::JsRef<jsg::JsObject>> compatFlagsObj;
   jsg::JsRef<jsg::JsObject> autogatesObj;
@@ -796,11 +811,26 @@ BootstrapState& getBootstrapState(jsg::Lock& js) {
       tryGetBootstrapState(js.v8Context()), "per-isolate bootstrap state not initialized");
 }
 
-// Compiles a single bootstrap script as a function taking PSEUDO_GLOBAL_NAMES as parameters.
+// Modules whose functions are invoked during per-context startup wiring (plus embedder scripts).
+// Compiling these eagerly in buildBaselineSnapshot() eliminates CompileLazy on isolate startup
+// without bloating TrustedSpace in the startup snapshot with hundreds of cold runtime-API methods
+// (such as webstreams/* method bodies) that are never called during isolate creation.
+bool shouldEagerCompileInBaseline(kj::StringPtr normalized, bool isEmbedderScript) {
+  if (isEmbedderScript) return true;
+  return normalized == "wire-context"_kj || normalized == "primordials-js"_kj ||
+      normalized == "wasm-instantiate-shim"_kj || normalized == "dom-exception"_kj ||
+      normalized == "url/url"_kj || normalized == "urlpattern/urlpattern"_kj ||
+      normalized == "structured-clone"_kj || normalized == "eventsource/eventsource"_kj ||
+      normalized == "runtime-class"_kj || normalized == "events/event-target-internals"_kj;
+}
+// When `eagerCompile` is true (used once per process inside buildBaselineSnapshot()), every inner
+// function is compiled eagerly into bytecode so FunctionCodeHandling::kKeep eliminates CompileLazy
+// on restored isolates.
 jsg::JsFunction compileBootstrapScript(jsg::Lock& js,
     kj::StringPtr normalized,
     jsg::Module::Reader script,
-    const jsg::ModuleSource* moduleSource) {
+    const jsg::ModuleSource* moduleSource,
+    bool eagerCompile = false) {
   auto source = script.getSrc();
   auto& observer = jsg::IsolateBase::from(js.v8Isolate).getObserver();
   // Without a ModuleSource, V8 gets the script's bytes as a one-byte (Latin-1) string
@@ -827,11 +857,13 @@ jsg::JsFunction compileBootstrapScript(jsg::Lock& js,
 
   // Use the compile cache from the bundle if available and compatible. Static compile caches are
   // generated against V8's embedded default snapshot, so skip them in isolates booted from a
-  // custom snapshot (where CompatibilityCheck would reject them).
+  // custom snapshot (where CompatibilityCheck would reject them) and during eager baseline
+  // compilation (kEagerCompile and kConsumeCodeCache are mutually exclusive in V8).
   v8::ScriptCompiler::CachedData* cachedData = nullptr;
-  auto options = v8::ScriptCompiler::kNoCompileOptions;
+  auto options = eagerCompile ? v8::ScriptCompiler::kEagerCompile
+                              : v8::ScriptCompiler::kNoCompileOptions;
   auto compileCache = script.getCompileCache();
-  if (!js.isStartingFromSnapshot() && !js.isStartingFromBaselineSnapshot() &&
+  if (!eagerCompile && !js.isStartingFromSnapshot() && !js.isStartingFromBaselineSnapshot() &&
       compileCache.size() > 0 && compileCache.begin() != nullptr) {
     // V8 takes ownership of the CachedData instance but not the underlying
     // buffer (which lives in the static capnp bundle data).
@@ -900,9 +932,9 @@ void requireImpl(const v8::FunctionCallbackInfo<v8::Value>& info, RequireScope s
       KJ_REQUIRE(!isEmbedderScript || scope == RequireScope::EMBEDDER,
           "per-isolate bootstrap: workerd's scripts cannot require the embedder's", normalized);
 
-      // Check cache.
-      KJ_IF_SOME(cached, state.cache.find(normalized)) {
-        info.GetReturnValue().Set(v8::Local<v8::Value>(cached.getHandle(js)));
+      // Check cache (both per-context additions and any snapshot-stashed cache object).
+      KJ_IF_SOME(cached, state.tryGetLoadedExports(js, normalized)) {
+        info.GetReturnValue().Set(v8::Local<v8::Value>(cached));
         return;
       }
 
@@ -944,9 +976,17 @@ void requireImpl(const v8::FunctionCallbackInfo<v8::Value>& info, RequireScope s
       kj::Maybe<jsg::JsFunction> maybeFn;
       KJ_IF_SOME(precompiled, state.compiledScripts.find(normalized)) {
         maybeFn = precompiled.getHandle(js);
+      } else KJ_IF_SOME(stashedCompiled, state.stashedCompiledScripts) {
+        auto obj = stashedCompiled.getHandle(js);
+        if (obj.has(js, normalized)) {
+          maybeFn = KJ_REQUIRE_NONNULL(JSG_TRY_CAST_FUNCTION(obj.get(js, normalized)),
+              "baseline bootstrap compiled script entry is not a function");
+        }
       }
       auto fn = maybeFn.orDefault([&]() {
-        return compileBootstrapScript(js, normalized, script, state.moduleSource);
+        bool eager = state.eagerCompile &&
+            shouldEagerCompileInBaseline(normalized, isEmbedderScript);
+        return compileBootstrapScript(js, normalized, script, state.moduleSource, eager);
       });
 
       // Execute the script.
@@ -985,16 +1025,20 @@ jsg::JsRef<jsg::JsFunction> newRequireFunction(jsg::Lock& js, v8::FunctionCallba
 void populateCompatFlagsObject(
     jsg::Lock& js, jsg::JsObject obj, CompatibilityFlags::Reader flags) {
   auto dynamicFlags = capnp::toDynamic(flags);
+  auto v8Obj = v8::Local<v8::Object>(obj);
+  auto context = js.v8Context();
+  auto v8True = v8::True(js.v8Isolate);
 
   for (auto& entry: getCompatFlagFields()) {
     if (dynamicFlags.get(entry.field).as<bool>()) {
-      obj.set(js, entry.enableFlag, js.boolean(true));
+      jsg::check(v8Obj->CreateDataProperty(
+          context, v8::Local<v8::String>(js.strIntern(entry.enableFlag)), v8True));
     }
   }
 }
 
 jsg::JsRef<jsg::JsObject> buildCompatFlagsObject(jsg::Lock& js, CompatibilityFlags::Reader flags) {
-  auto obj = js.obj();
+  auto obj = js.objNoProto();
   populateCompatFlagsObject(js, obj, flags);
   return obj.addRef(js);
 }
@@ -1051,8 +1095,10 @@ constexpr kj::StringPtr STASH_PRIMORDIALS = "primordials"_kj;
 // module.exports.
 constexpr kj::StringPtr STASH_CACHE = "cache"_kj;
 // Baseline snapshot only: a null-prototype object mapping each normalized specifier to its
-// pre-compiled v8::Function.
+// pre-compiled v8::Function (used for embedder scripts).
 constexpr kj::StringPtr STASH_COMPILED_SCRIPTS = "compiledScripts"_kj;
+// Baseline snapshot only: the pre-evaluated wireFromBaseline(global) function from wire-context.
+constexpr kj::StringPtr STASH_WIRE_FN = "wireFn"_kj;
 
 // Returns the state a zygote pinned into the snapshot `context` was deserialized from. V8 hands
 // a pinned value out exactly once, so the restore cannot run twice. Only valid in an isolate
@@ -1102,15 +1148,7 @@ void restoreBootstrapState(jsg::Lock& js, BootstrapState* state, jsg::JsObject b
     state->embedderRequireFn = fn.addRef(js);
   }
   state->primordials = bag.get(js, STASH_PRIMORDIALS).addRef(js);
-
-  auto maybeCache = JSG_TRY_CAST_OBJECT(bag.get(js, STASH_CACHE));
-  auto& cache =
-      KJ_REQUIRE_NONNULL(maybeCache, "snapshot bootstrap state is missing the require() cache");
-  auto names = cache.getPropertyNames(js, jsg::OWN_ONLY, jsg::ALL_PROPERTIES, jsg::SKIP_INDICES);
-  for (uint32_t i = 0; i < names.size(); i++) {
-    auto name = names.get(js, i);
-    state->cache.insert(name.toString(js), cache.get(js, name).addRef(js));
-  }
+  state->stashedCache = takeObject(STASH_CACHE);
 }
 
 // Runs the per-context wiring phase: loads `primordials` (extending pure-JS primordials with this
@@ -1173,29 +1211,25 @@ void bootstrapFromBaselineSnapshot(
     }
   }
 
-  auto maybeCache = JSG_TRY_CAST_OBJECT(bag.get(js, STASH_CACHE));
-  auto& cache =
-      KJ_REQUIRE_NONNULL(maybeCache, "baseline bootstrap state is missing the require() cache");
-  auto cacheNames =
-      cache.getPropertyNames(js, jsg::OWN_ONLY, jsg::ALL_PROPERTIES, jsg::SKIP_INDICES);
-  for (uint32_t i = 0; i < cacheNames.size(); i++) {
-    auto name = cacheNames.get(js, i);
-    state->cache.insert(name.toString(js), cache.get(js, name).addRef(js));
+  state->stashedCache = takeObject(STASH_CACHE);
+  state->stashedCompiledScripts = takeObject(STASH_COMPILED_SCRIPTS);
+
+  {
+    TRACE_EVENT("workerd", "PerIsolateBootstrap::wireFromBaseline");
+    auto maybeWireFn = JSG_TRY_CAST_FUNCTION(bag.get(js, STASH_WIRE_FN));
+    auto& wireFn =
+        KJ_REQUIRE_NONNULL(maybeWireFn, "baseline bootstrap state is missing wireFromBaseline()");
+    auto primed = wireFn.call(js, js.undefined(), js.global());
+    state->primordials = primed.addRef(js);
+    state->cache.insert(kj::str("primordials"), primed.addRef(js));
   }
 
-  auto maybeCompiled = JSG_TRY_CAST_OBJECT(bag.get(js, STASH_COMPILED_SCRIPTS));
-  auto& compiled = KJ_REQUIRE_NONNULL(
-      maybeCompiled, "baseline bootstrap state is missing pre-compiled scripts");
-  auto compiledNames =
-      compiled.getPropertyNames(js, jsg::OWN_ONLY, jsg::ALL_PROPERTIES, jsg::SKIP_INDICES);
-  for (uint32_t i = 0; i < compiledNames.size(); i++) {
-    auto name = compiledNames.get(js, i);
-    auto fn = KJ_REQUIRE_NONNULL(JSG_TRY_CAST_FUNCTION(compiled.get(js, name)),
-        "baseline bootstrap compiled script entry is not a function");
-    state->compiledScripts.insert(name.toString(js), fn.addRef(js));
+  KJ_IF_SOME(e, state->embedder) {
+    TRACE_EVENT("workerd", "PerIsolateBootstrap::embedderMain");
+    KJ_ASSERT_NONNULL(state->embedderRequireFn)
+        .getHandle(js)
+        .call(js, js.undefined(), js.strIntern(e.getEntryPoint()));
   }
-
-  runPerContextBootstrapWiring(js, state);
 }
 
 // Bootstraps a context built from scratch: creates require(), loads primordials and runs main.
@@ -1213,20 +1247,6 @@ void bootstrapFromScripts(jsg::Lock& js, BootstrapState* state, CompatibilityFla
   runPerContextBootstrapWiring(js, state);
 }
 
-// Bootstrap modules always pre-evaluated inside the process-wide baseline snapshot. None of these
-// allocate JSG wrappers or bake per-context CompatibilityFlags at module load time; JSG globals
-// are read through `primordials.jsg` and compat flags through the live `compatFlags` object
-// populated per context on restore.
-constexpr kj::StringPtr BASELINE_PRELOAD_MODULES[] = {
-  "serialization"_kj,
-  "runtime-class"_kj,
-  "events/event-target-internals"_kj,
-  "webstreams/streams"_kj,
-  "webstreams/cpp_exports"_kj,
-  "crypto/digest-stream"_kj,
-  "webfs/writable-file-stream"_kj,
-};
-
 // Populates `context` (a plain V8 context inside `buildBaselineSnapshot()`) with the
 // compat-flag-independent bootstrap state, pins it into the snapshot artifact, and releases the
 // C++ BootstrapState.
@@ -1238,10 +1258,13 @@ void populateBaselineBootstrapContext(jsg::Lock& js,
   JSG_TRY(js) {
     auto* state = allocateBootstrapState(js, scripts, embedder, moduleSource);
     KJ_DEFER(cleanupPerIsolateBootstrap(js, context));
+    // Compile every bootstrap script eagerly so FunctionCodeHandling::kKeep bakes all inner
+    // function bytecode into the baseline snapshot, eliminating CompileLazy on restored isolates.
+    state->eagerCompile = true;
 
-    // Empty mutable compatFlags object closed over by pre-evaluated modules and populated in place
-    // per context on restore.
-    state->compatFlagsObj = js.obj().addRef(js);
+    // Empty mutable null-prototype compatFlags object closed over by pre-evaluated modules and
+    // populated in place per context on restore.
+    state->compatFlagsObj = js.objNoProto().addRef(js);
     state->autogatesObj = buildAutogatesObject(js);
     state->utilsObj = createUtilsObject(js);
     state->requireFn = newRequireFunction(js, requireCallback);
@@ -1253,42 +1276,27 @@ void populateBaselineBootstrapContext(jsg::Lock& js,
       return state->requireFn.getHandle(js).call(js, js.undefined(), js.strIntern(specifier));
     };
 
-    // Pre-evaluate pure-JS primordials first, then all compat-flag-independent heavy bootstrap
-    // modules (all of webstreams, DigestStream, FileSystemWritableFileStream, serialization,
-    // runtime-class, event-target-internals, plus any autogate-enabled TS implementations).
+    // Pre-evaluate pure-JS primordials first, then `wire-context`, which transitively requires and
+    // pre-evaluates every compat-flag-independent bootstrap module (serialization, runtime-class,
+    // events/event-target-internals, wasm-instantiate-shim, dom-exception, webstreams/*,
+    // DigestStream, FileSystemWritableFileStream, EventSource, and autogate-enabled url/*,
+    // urlpattern, structured-clone) and pre-builds all frozen PropertyDescriptorMaps.
     state->primordials = requireModule("primordials-js"_kj).addRef(js);
+    auto wireExports = KJ_REQUIRE_NONNULL(
+        JSG_TRY_CAST_OBJECT(requireModule("wire-context"_kj)),
+        "wire-context module did not export an object");
+    auto wireFn = KJ_REQUIRE_NONNULL(
+        JSG_TRY_CAST_FUNCTION(wireExports.get(js, "wireFromBaseline"_kj)),
+        "wire-context module is missing wireFromBaseline()");
 
-    for (const auto& specifier: BASELINE_PRELOAD_MODULES) {
-      std::ignore = requireModule(specifier);
-    }
-    if (util::Autogate::isEnabled(util::AutogateKey::TS_DOM_EXCEPTION)) {
-      std::ignore = requireModule("dom-exception"_kj);
-    }
-    if (util::Autogate::isEnabled(util::AutogateKey::TS_URL)) {
-      std::ignore = requireModule("url/url"_kj);
-      std::ignore = requireModule("url/cpp_exports"_kj);
-    }
-    if (util::Autogate::isEnabled(util::AutogateKey::TS_URL_PATTERN)) {
-      std::ignore = requireModule("urlpattern/urlpattern"_kj);
-    }
-    if (util::Autogate::isEnabled(util::AutogateKey::TS_STRUCTURED_CLONE)) {
-      std::ignore = requireModule("structured-clone"_kj);
-    }
-
-    // Pre-compile only the remaining scripts not already evaluated in `state->cache` (e.g.
-    // primordials, main, eventsource, lazy messagechannel, embedder scripts). With
-    // FunctionCodeHandling::kKeep their bytecode stays in the snapshot, avoiding CompileLazy on
-    // restore without bloating the snapshot with already-evaluated script closures.
-    for (auto& entry: scripts) {
-      if (state->cache.find(entry.key) != kj::none) continue;
-      state->compiledScripts.insert(kj::str(entry.key),
-          compileBootstrapScript(js, entry.key, entry.value, moduleSource).addRef(js));
-    }
+    // Pre-compile embedder scripts eagerly so they run without parsing on restore. Lazy /
+    // test-only workerd scripts (e.g. messagechannel, testing/cloneable-test-box) are intentionally
+    // left out to keep the baseline startup heap small and are compiled on demand if ever used.
     KJ_IF_SOME(e, embedder) {
       for (auto& entry: e.getScripts()) {
         if (state->cache.find(entry.key) != kj::none) continue;
         state->compiledScripts.insert(kj::str(entry.key),
-            compileBootstrapScript(js, entry.key, entry.value, moduleSource).addRef(js));
+            compileBootstrapScript(js, entry.key, entry.value, moduleSource, true).addRef(js));
       }
     }
 
@@ -1297,6 +1305,8 @@ void populateBaselineBootstrapContext(jsg::Lock& js,
     for (auto& entry: state->cache) {
       cache.set(js, entry.key, entry.value.getHandle(js));
     }
+    // Mark `main` as loaded so embedder scripts calling require('main') do not re-run it.
+    cache.set(js, "main"_kj, js.obj());
     auto compiled = js.objNoProto();
     for (auto& entry: state->compiledScripts) {
       compiled.set(js, entry.key, entry.value.getHandle(js));
@@ -1312,6 +1322,7 @@ void populateBaselineBootstrapContext(jsg::Lock& js,
     bag.set(js, STASH_UTILS, state->utilsObj.getHandle(js));
     bag.set(js, STASH_CACHE, cache);
     bag.set(js, STASH_COMPILED_SCRIPTS, compiled);
+    bag.set(js, STASH_WIRE_FN, wireFn);
 
     auto& isolateBase = jsg::IsolateBase::from(js.v8Isolate);
     isolateBase.mutableSnapshotArtifact().baselineBootstrapStateIndex =
@@ -1420,8 +1431,10 @@ void stashPerIsolateBootstrapForSnapshot(jsg::Lock& js, v8::Local<v8::Context> c
     JSG_WITHIN_CONTEXT_SCOPE(js, context, [&](jsg::Lock& js) {
       KJ_REQUIRE(state.loading.size() == 0, "require() still in progress at snapshot time");
       // The cache is read now rather than when the bootstrap finished: a lazy require() during
-      // the zygote's top-level evaluation grows it after main returned.
-      auto cache = js.objNoProto();
+      // the zygote's top-level evaluation grows it after main returned. Reuse any stashed cache
+      // object from a baseline snapshot so its entries do not need to be copied.
+      auto cache = state.stashedCache.map([&](auto& s) { return s.getHandle(js); })
+                       .orDefault([&]() { return js.objNoProto(); });
       for (auto& entry: state.cache) {
         cache.set(js, entry.key, entry.value.getHandle(js));
       }
@@ -1522,8 +1535,8 @@ kj::Maybe<jsg::JsFunction> tryGetBootstrapFunction(
     }
   }
 
-  KJ_IF_SOME(cached, state.cache.find(normalized)) {
-    KJ_IF_SOME(obj, cached.getHandle(js).tryCast<jsg::JsObject>()) {
+  KJ_IF_SOME(cached, state.tryGetLoadedExports(js, normalized)) {
+    KJ_IF_SOME(obj, cached.tryCast<jsg::JsObject>()) {
       KJ_IF_SOME(func, obj.get(js, name).tryCast<jsg::JsFunction>()) {
         auto& functions = state.functionCache.findOrCreate(normalized,
             [&]() -> decltype(state.functionCache)::Entry { return {kj::str(normalized), {}}; });
