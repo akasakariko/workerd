@@ -34,28 +34,29 @@ const { PROTOCOL, USERNAME, PASSWORD, HOSTNAME, PORT, PATHNAME, SEARCH, HASH } =
 // String inputs are parsed as URLs with ada, whichever parser compiled the
 // pattern, as both C++ implementations do.
 const adaUrl = require('url/ada-backend') as UrlBackend<unknown>;
-const { markAsRuntimeClass, setNameAndLength } =
+const { markAsRuntimeClassBase, setNameAndLength } =
   require('runtime-class') as RuntimeClassHelpers;
 const { markUncloneable } = require('serialization') as SerializationHelpers;
 
-// Configured per context by configure() (called by main.ts once compatFlags
-// are populated) so URLPattern can be pre-evaluated in a baseline snapshot.
-let kStandard = false;
+// Configured per context by configure() once compatFlags are populated so
+// URLPattern can be pre-evaluated in a baseline snapshot. Defaults match
+// `urlpattern_standard` so modern contexts do minimal work.
+let kStandard = true;
 
 // The parser's members of utils: they compile a pattern, and process an
 // init input into the components matching compares.
-let compilePattern = utils.legacyUrlPatternCompile;
+let compilePattern = utils.urlPatternCompile;
 // The legacy parser's throws its TypeError where the standard one's
 // returns undefined.
 let processInit: (init: UrlPatternInitList) => string[] | undefined =
-  utils.legacyUrlPatternProcessInit;
+  utils.urlPatternProcessInit;
 
 const kIllegalInvocation =
   'Illegal invocation: function called with incorrect `this` reference. ' +
   'See https://developers.cloudflare.com/workers/observability/errors/' +
   '#illegal-invocation-errors for details.';
-let kExecInitWithBase = 'A baseURL is not allowed when input is an object.';
-let kTestInitWithBase = 'A baseURL is not allowed when input is an object.';
+let kExecInitWithBase = 'Failed to exec URLPattern';
+let kTestInitWithBase = 'Failed to test URLPattern';
 
 // The component types, as UrlPatternBootstrap::ComponentType numbers them:
 // ada's fast paths. The others, REGEXP (0), match by their RegExp, which
@@ -616,30 +617,28 @@ setNameAndLength(URLPattern, 'URLPattern', 0);
 setNameAndLength(proto.test, 'test', 0);
 setNameAndLength(proto.exec, 'exec', 0);
 
+// WebIDL makes the tag non-writable; JSG's is writable. Pre-installed in the
+// baseline snapshot so modern contexts do zero property work.
+ObjectDefineProperty(proto, SymbolToStringTag, {
+  __proto__: null,
+  value: 'URLPattern',
+  writable: false,
+  enumerable: false,
+  configurable: true,
+} as PropertyDescriptor);
+markAsRuntimeClassBase(proto);
+
 function configure(): void {
   kStandard = compatFlags['urlpattern_standard'] === true;
-  compilePattern = kStandard
-    ? utils.urlPatternCompile
-    : utils.legacyUrlPatternCompile;
-  processInit = kStandard
-    ? utils.urlPatternProcessInit
-    : utils.legacyUrlPatternProcessInit;
-  kExecInitWithBase = kStandard
-    ? 'Failed to exec URLPattern'
-    : 'A baseURL is not allowed when input is an object.';
-  kTestInitWithBase = kStandard
-    ? 'Failed to test URLPattern'
-    : 'A baseURL is not allowed when input is an object.';
   if (!kStandard) {
+    compilePattern = utils.legacyUrlPatternCompile;
+    processInit = utils.legacyUrlPatternProcessInit;
+    kExecInitWithBase = 'A baseURL is not allowed when input is an object.';
+    kTestInitWithBase = 'A baseURL is not allowed when input is an object.';
     delete (proto as { hasRegExpGroups?: unknown }).hasRegExpGroups;
   }
-  markAsRuntimeClass(proto, 'URLPattern');
-  // WebIDL makes the tag non-writable; JSG's is writable.
-  if (compatFlags['set_tostring_tag'] === true) {
-    ObjectDefineProperty(proto, SymbolToStringTag, {
-      __proto__: null,
-      writable: false,
-    } as PropertyDescriptor);
+  if (compatFlags['set_tostring_tag'] !== true) {
+    delete (proto as unknown as Record<symbol, unknown>)[SymbolToStringTag];
   }
 }
 

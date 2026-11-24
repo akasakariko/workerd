@@ -44,7 +44,7 @@ const {
   QuotaExceededError,
   configure: configureDomException,
 } = require('dom-exception');
-configureDomException();
+configureDomException(globalThis);
 
 // The TypeScript DOMException replaces the C++ one, which global-scope.h then
 // leaves out, and adds QuotaExceededError, which the C++ one lacks. Installed
@@ -359,7 +359,10 @@ if (compatFlags['expose_global_message_channel']) {
 // global class: on the global scope's prototype, with all three attributes
 // true, and under spec_compliant_property_attributes also as an own property
 // of the global, non-enumerable per Web IDL.
-const { EventSource } = require('eventsource/eventsource');
+const { EventSource, configure: configureEventSource } = require(
+  'eventsource/eventsource'
+);
+configureEventSource();
 ObjectDefineProperties(ObjectGetPrototypeOf(globalThis), {
   EventSource: {
     __proto__: null,

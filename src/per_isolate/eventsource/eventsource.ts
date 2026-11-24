@@ -41,9 +41,7 @@ import type { EventTargetInternals } from '../events/event-target-internals';
 import type { RuntimeClassHelpers } from '../runtime-class';
 
 const {
-  AbortController,
-  AbortControllerAbort,
-  AbortControllerSignalGet,
+  jsg: jsgPrimordials,
   ArrayPrototypePush,
   DataViewPrototypeGetBuffer,
   DataViewPrototypeGetByteLength,
@@ -56,16 +54,14 @@ const {
   ObjectDefineProperty,
   ObjectFreeze,
   ObjectGetOwnPropertyDescriptor,
+  ObjectSetPrototypeOf,
   PromisePrototypeThen,
   StringPrototypeCharCodeAt,
   StringPrototypeIndexOf,
   StringPrototypeSlice,
   Symbol,
   SymbolDispose,
-  TextDecoder,
-  TextDecoderDecode,
-  TextEncoder,
-  TextEncoderEncode,
+  SymbolToStringTag,
   TypeError,
   TypedArrayPrototypeGetBuffer,
   TypedArrayPrototypeGetByteLength,
@@ -88,7 +84,6 @@ const {
 } = utils;
 
 const {
-  EventTarget,
   createTrustedErrorEvent,
   createTrustedMessageEvent,
   createTrustedOpenEvent,
@@ -97,53 +92,27 @@ const {
   getEventHandlerAttribute,
   setEventHandlerAttribute,
 } = require('events/event-target-internals') as EventTargetInternals;
-const { markAsRuntimeClass, setNameAndLength } =
+const { markAsRuntimeClassBase, setNameAndLength } =
   require('runtime-class') as RuntimeClassHelpers;
 
-const { DOMException } = require('dom-exception') as DomExceptionModule;
+const domExceptionMod = require('dom-exception') as DomExceptionModule;
 
-// Whichever streams implementation main.ts installed before loading this
-// module; a Response body and anything EventSource.from() accepts are its
-// streams.
+// Whichever streams implementation main.ts installed before calling
+// configure(); a Response body and anything EventSource.from() accepts are its
+// streams. Captured per context in configure() so this module can be
+// pre-evaluated in a process-wide baseline snapshot.
 type Reader = ReadableStreamDefaultReader<unknown>;
-const ReadableStreamGetReader = uncurryThis(
-  globalThis.ReadableStream.prototype.getReader
-) as (stream: ReadableStream) => Reader;
-const ReaderRead = uncurryThis(
-  globalThis.ReadableStreamDefaultReader.prototype.read
-) as (reader: Reader) => Promise<ReadableStreamReadResult<unknown>>;
-const ReaderCancel = uncurryThis(
-  globalThis.ReadableStreamDefaultReader.prototype.cancel
-) as (reader: Reader, reason?: unknown) => Promise<void>;
+let ReadableStreamGetReader!: (stream: ReadableStream) => Reader;
+let ReaderRead!: (reader: Reader) => Promise<ReadableStreamReadResult<unknown>>;
+let ReaderCancel!: (reader: Reader, reason?: unknown) => Promise<void>;
 
-const ResponseProto = globalThis.Response.prototype;
-const ResponseOkGet = captureJsgGetter<(response: Response) => boolean>(
-  ResponseProto,
-  'ok'
-);
-const ResponseStatusGet = captureJsgGetter<(response: Response) => number>(
-  ResponseProto,
-  'status'
-);
-const ResponseHeadersGet = captureJsgGetter<(response: Response) => Headers>(
-  ResponseProto,
-  'headers'
-);
-const ResponseRedirectedGet = captureJsgGetter<(response: Response) => boolean>(
-  ResponseProto,
-  'redirected'
-);
-const ResponseUrlGet = captureJsgGetter<(response: Response) => string>(
-  ResponseProto,
-  'url'
-);
-const ResponseBodyGet = captureJsgGetter<
-  (response: Response) => ReadableStream | null
->(ResponseProto, 'body');
-const HeadersGet = uncurryThis(globalThis.Headers.prototype.get) as (
-  headers: Headers,
-  name: string
-) => string | null;
+let ResponseOkGet!: (response: Response) => boolean;
+let ResponseStatusGet!: (response: Response) => number;
+let ResponseHeadersGet!: (response: Response) => Headers;
+let ResponseRedirectedGet!: (response: Response) => boolean;
+let ResponseUrlGet!: (response: Response) => string;
+let ResponseBodyGet!: (response: Response) => ReadableStream | null;
+let HeadersGet!: (headers: Headers, name: string) => string | null;
 
 // JSG's messages, so that misuse reads as it does for a JSG class.
 const kIllegalInvocation =
@@ -174,10 +143,8 @@ const kEventStreamMimeType = 'text/event-stream';
 
 // What a draining read of each streams implementation throws for a chunk
 // that is not bytes; a non-byte chunk fails the EventSource with it.
-const kNotBytes =
-  compatFlags['typescript_implemented_streams'] === true
-    ? 'This ReadableStream did not return bytes.'
-    : 'Draining read encountered a value that cannot be converted to bytes';
+let kNotBytes =
+  'Draining read encountered a value that cannot be converted to bytes';
 
 // Lets EventSource.from() construct an EventSource without a URL.
 const kConstructFrom: symbol = Symbol('kConstructFrom');
@@ -321,12 +288,20 @@ class EventStreamParser {
   }
 }
 
-const encoder = new TextEncoder();
+let encoder: TextEncoder | undefined;
+function getEncoder(): TextEncoder {
+  if (encoder === undefined) {
+    encoder = new jsgPrimordials.TextEncoder() as TextEncoder;
+  }
+  return encoder;
+}
 
 // A chunk as bytes, as a draining read converts it: a string as its UTF-8,
 // any buffer or view as its bytes. Undefined for anything else.
 function chunkBytes(chunk: unknown): Uint8Array | undefined {
-  if (typeof chunk === 'string') return TextEncoderEncode(encoder, chunk);
+  if (typeof chunk === 'string') {
+    return jsgPrimordials.TextEncoderEncode(getEncoder(), chunk);
+  }
   if (isAnyArrayBuffer(chunk)) return new Uint8Array(chunk);
   if (isArrayBufferView(chunk)) {
     if (isDataView(chunk)) {
@@ -370,7 +345,13 @@ function ignoreRejection(promise: Promise<unknown>): void {
 // EventSource, primitives and undefined included, is an illegal invocation.
 let requireSource: (receiver: unknown) => void;
 
-class EventSource extends EventTarget {
+// Placeholder heritage for pre-evaluating EventSource in a baseline snapshot.
+// configure() re-parents EventSource and EventSource.prototype onto the
+// context's real C++ EventTarget before any EventSource can be constructed, so
+// `super()` invokes GetSuperConstructor() === EventTarget.
+const EventSourceBase = function EventSourceBase(): void {} as unknown as typeof globalThis.EventTarget;
+
+class EventSource extends EventSourceBase {
   #io: RequestIo;
   #readyState: ReadyState = CONNECTING;
   #closeCalled = false;
@@ -378,7 +359,7 @@ class EventSource extends EventTarget {
   #url: string | undefined = undefined;
   #origin: string | null = null;
   #fetcher: unknown = undefined;
-  #controller: AbortController = new AbortController();
+  #controller: AbortController = new jsgPrimordials.AbortController();
   // The reader of the stream being read, if any.
   #reader: Reader | undefined = undefined;
   #lastEventId = '';
@@ -436,9 +417,9 @@ class EventSource extends EventTarget {
 
     const io = createRequestIo();
     if (io === undefined)
-      throw new DOMException(kNoRequest, 'NotSupportedError');
+      throw new domExceptionMod.DOMException(kNoRequest, 'NotSupportedError');
     if (withCredentials) {
-      throw new DOMException(
+      throw new domExceptionMod.DOMException(
         'The init.withCredentials option is not supported. It must be ' +
           'false or undefined.',
         'NotSupportedError'
@@ -446,7 +427,7 @@ class EventSource extends EventTarget {
     }
     const parsed = parseUrl(urlString);
     if (parsed === undefined) {
-      throw new DOMException(
+      throw new domExceptionMod.DOMException(
         `Cannot open an EventSource to '${urlString}'. The URL is invalid.`,
         'SyntaxError'
       );
@@ -471,7 +452,7 @@ class EventSource extends EventTarget {
     }
     const io = createRequestIo();
     if (io === undefined)
-      throw new DOMException(kNoRequest, 'NotSupportedError');
+      throw new domExceptionMod.DOMException(kNoRequest, 'NotSupportedError');
     if (state === 'locked') {
       throw new TypeError('This ReadableStream is locked.');
     }
@@ -488,7 +469,7 @@ class EventSource extends EventTarget {
     if (this.#closeCalled) return;
     this.#io.requireCurrent();
     this.#closeCalled = true;
-    AbortControllerAbort(this.#controller);
+    jsgPrimordials.AbortControllerAbort(this.#controller);
     this.#readyState = CLOSED;
     this.#cancelReader(undefined);
   }
@@ -558,7 +539,7 @@ class EventSource extends EventTarget {
       {
         __proto__: null,
         headers,
-        signal: AbortControllerSignalGet(this.#controller),
+        signal: jsgPrimordials.AbortControllerSignalGet(this.#controller),
       } as RequestInit
     );
     PromisePrototypeThen(
@@ -578,7 +559,7 @@ class EventSource extends EventTarget {
     if (this.#readyState === CLOSED) return;
     // Failures that no reconnection could cure.
     const fail = (message: string): void => {
-      this.#notifyError(new DOMException(message, 'AbortError'));
+      this.#notifyError(new domExceptionMod.DOMException(message, 'AbortError'));
     };
     if (!ResponseOkGet(response)) {
       fail(`The response status code was ${ResponseStatusGet(response)}.`);
@@ -624,11 +605,11 @@ class EventSource extends EventTarget {
     this.#io.requireCurrent();
     if (this.#readyState === CLOSED) return;
     this.#readyState = CONNECTING;
-    this.#controller = new AbortController();
+    this.#controller = new jsgPrimordials.AbortController();
     PromisePrototypeThen(
       this.#io.wait(
         this.#reconnectionTime,
-        AbortControllerSignalGet(this.#controller)
+        jsgPrimordials.AbortControllerSignalGet(this.#controller)
       ),
       () => {
         this.#connect();
@@ -650,7 +631,7 @@ class EventSource extends EventTarget {
 
     const reader = ReadableStreamGetReader(stream);
     this.#reader = reader;
-    const decoder = new TextDecoder();
+    const decoder = new jsgPrimordials.TextDecoder();
     const parser = new EventStreamParser(this.#lastEventId);
     // Whether this read is still the EventSource's, rather than one it has
     // closed or moved on from.
@@ -682,7 +663,7 @@ class EventSource extends EventTarget {
           }
           const messages: Message[] = [];
           parser.feed(
-            TextDecoderDecode(decoder, bytes, kStreamOption),
+            jsgPrimordials.TextDecoderDecode(decoder, bytes, kStreamOption),
             messages
           );
           this.#lastEventId = parser.lastEventId;
@@ -792,7 +773,7 @@ class EventSource extends EventTarget {
     alreadyReported: boolean = false
   ): void {
     if (this.#readyState === CLOSED) return;
-    AbortControllerAbort(this.#controller, error);
+    jsgPrimordials.AbortControllerAbort(this.#controller, error);
     if (reconnecting) {
       this.#readyState = CONNECTING;
     } else {
@@ -811,24 +792,29 @@ class EventSource extends EventTarget {
 }
 
 // ---------------------------------------------------------------------------
-// The rest makes the class look as JSG's does.
-
-const kSpecCompliantPropertyAttributes =
-  compatFlags['spec_compliant_property_attributes'] === true;
+// The rest makes the class look as JSG's does. Built once in the baseline
+// snapshot with modern names/lengths, Symbol.toStringTag, and configurable
+// constants so configure() only applies per-context diffs and re-parents onto
+// EventTarget.
 
 const proto = EventSource.prototype;
 
-// WebIDL constants are non-configurable; JSG's are configurable unless
-// spec_compliant_property_attributes.
-function constant(value: number): PropertyDescriptor {
+function configurableConstant(value: number): PropertyDescriptor {
   return {
     __proto__: null,
     value,
     writable: false,
     enumerable: true,
-    configurable: !kSpecCompliantPropertyAttributes,
+    configurable: true,
   } as PropertyDescriptor;
 }
+
+const kNonConfigurableConstants: PropertyDescriptorMap = ObjectFreeze({
+  __proto__: null,
+  CONNECTING: ObjectFreeze({ __proto__: null, configurable: false }),
+  OPEN: ObjectFreeze({ __proto__: null, configurable: false }),
+  CLOSED: ObjectFreeze({ __proto__: null, configurable: false }),
+}) as unknown as PropertyDescriptorMap;
 
 // JSG methods are enumerable.
 ObjectDefineProperties(proto, {
@@ -847,27 +833,21 @@ const kAccessors = [
   'onmessage',
   'onerror',
 ] as const;
+const kAccessorDescriptors: PropertyDescriptor[] = [];
 for (let i = 0; i < kAccessors.length; i++) {
   const name = kAccessors[i] as string;
   const descriptor = ObjectGetOwnPropertyDescriptor(
     proto,
     name
   ) as PropertyDescriptor;
-  setNameAndLength(
-    descriptor.get,
-    kSpecCompliantPropertyAttributes ? `get ${name}` : '',
-    0
-  );
+  setNameAndLength(descriptor.get, `get ${name}`, 0);
   if (descriptor.set !== undefined) {
-    setNameAndLength(
-      descriptor.set,
-      kSpecCompliantPropertyAttributes ? `set ${name}` : '',
-      kSpecCompliantPropertyAttributes ? 1 : 0
-    );
+    setNameAndLength(descriptor.set, `set ${name}`, 1);
   }
   descriptor.enumerable = true;
   delete (proto as unknown as Record<string, unknown>)[name];
   ObjectDefineProperty(proto, name, descriptor);
+  ArrayPrototypePush(kAccessorDescriptors, descriptor);
 }
 
 // The constants, on the prototype and then the constructor, which then gets
@@ -875,9 +855,9 @@ for (let i = 0; i < kAccessors.length; i++) {
 // the marks every JSG resource type carries follow it.
 ObjectDefineProperties(proto, {
   __proto__: null,
-  CONNECTING: constant(CONNECTING),
-  OPEN: constant(OPEN),
-  CLOSED: constant(CLOSED),
+  CONNECTING: configurableConstant(CONNECTING),
+  OPEN: configurableConstant(OPEN),
+  CLOSED: configurableConstant(CLOSED),
 });
 delete (proto as unknown as { constructor?: unknown }).constructor;
 ObjectDefineProperty(proto, 'constructor', {
@@ -890,14 +870,12 @@ ObjectDefineProperty(proto, 'constructor', {
 
 const from = EventSource.fromStream;
 delete (EventSource as unknown as Record<string, unknown>).fromStream;
-// Under spec_compliant_property_attributes, lengths count the required
-// arguments.
-setNameAndLength(from, 'from', kSpecCompliantPropertyAttributes ? 1 : 0);
+setNameAndLength(from, 'from', 1);
 ObjectDefineProperties(EventSource, {
   __proto__: null,
-  CONNECTING: constant(CONNECTING),
-  OPEN: constant(OPEN),
-  CLOSED: constant(CLOSED),
+  CONNECTING: configurableConstant(CONNECTING),
+  OPEN: configurableConstant(OPEN),
+  CLOSED: configurableConstant(CLOSED),
   from: {
     __proto__: null,
     value: from,
@@ -906,13 +884,16 @@ ObjectDefineProperties(EventSource, {
     configurable: true,
   },
 });
-setNameAndLength(
-  EventSource,
-  'EventSource',
-  kSpecCompliantPropertyAttributes ? 1 : 0
-);
+setNameAndLength(EventSource, 'EventSource', 1);
 
-markAsRuntimeClass(proto, 'EventSource');
+ObjectDefineProperty(proto, SymbolToStringTag, {
+  __proto__: null,
+  value: 'EventSource',
+  writable: true,
+  enumerable: false,
+  configurable: true,
+} as PropertyDescriptor);
+markAsRuntimeClassBase(proto);
 
 // Disposal defers to close(), through a function of its own, anonymous and
 // of length 0, as JSG_DISPOSE installs it. It calls this class's close()
@@ -934,10 +915,80 @@ ObjectDefineProperty(proto, SymbolDispose, {
   configurable: true,
 } as PropertyDescriptor);
 
+function configure(): void {
+  ObjectSetPrototypeOf(EventSource, jsgPrimordials.EventTarget);
+  ObjectSetPrototypeOf(proto, jsgPrimordials.EventTargetPrototype);
+
+  ReadableStreamGetReader = uncurryThis(
+    globalThis.ReadableStream.prototype.getReader
+  ) as (stream: ReadableStream) => Reader;
+  ReaderRead = uncurryThis(
+    globalThis.ReadableStreamDefaultReader.prototype.read
+  ) as (reader: Reader) => Promise<ReadableStreamReadResult<unknown>>;
+  ReaderCancel = uncurryThis(
+    globalThis.ReadableStreamDefaultReader.prototype.cancel
+  ) as (reader: Reader, reason?: unknown) => Promise<void>;
+
+  const ResponseProto = globalThis.Response.prototype;
+  ResponseOkGet = captureJsgGetter<(response: Response) => boolean>(
+    ResponseProto,
+    'ok'
+  );
+  ResponseStatusGet = captureJsgGetter<(response: Response) => number>(
+    ResponseProto,
+    'status'
+  );
+  ResponseHeadersGet = captureJsgGetter<(response: Response) => Headers>(
+    ResponseProto,
+    'headers'
+  );
+  ResponseRedirectedGet = captureJsgGetter<(response: Response) => boolean>(
+    ResponseProto,
+    'redirected'
+  );
+  ResponseUrlGet = captureJsgGetter<(response: Response) => string>(
+    ResponseProto,
+    'url'
+  );
+  ResponseBodyGet = captureJsgGetter<
+    (response: Response) => ReadableStream | null
+  >(ResponseProto, 'body');
+  HeadersGet = uncurryThis(globalThis.Headers.prototype.get) as (
+    headers: Headers,
+    name: string
+  ) => string | null;
+
+  kNotBytes =
+    compatFlags['typescript_implemented_streams'] === true
+      ? 'This ReadableStream did not return bytes.'
+      : 'Draining read encountered a value that cannot be converted to bytes';
+
+  if (compatFlags['spec_compliant_property_attributes'] === true) {
+    ObjectDefineProperties(proto, kNonConfigurableConstants);
+    ObjectDefineProperties(EventSource, kNonConfigurableConstants);
+  } else {
+    for (let i = 0; i < kAccessorDescriptors.length; i++) {
+      const descriptor = kAccessorDescriptors[i] as PropertyDescriptor;
+      setNameAndLength(descriptor.get, '', 0);
+      if (descriptor.set !== undefined) {
+        setNameAndLength(descriptor.set, '', 0);
+      }
+    }
+    setNameAndLength(from, 'from', 0);
+    setNameAndLength(EventSource, 'EventSource', 0);
+  }
+
+  if (compatFlags['set_tostring_tag'] !== true) {
+    delete (proto as unknown as Record<symbol, unknown>)[SymbolToStringTag];
+  }
+}
+
 export type EventSourceExports = {
   EventSource: typeof EventSource;
+  configure: typeof configure;
 };
 
-module.exports = {
+module.exports = ObjectFreeze({
   EventSource,
-};
+  configure,
+});

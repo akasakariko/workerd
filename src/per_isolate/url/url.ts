@@ -53,7 +53,7 @@ const {
   SEARCH,
   HASH,
 } = require('url/backend') as UrlAttributes;
-const { markAsRuntimeClass, setNameAndLength } =
+const { markAsRuntimeClassBase, setNameAndLength } =
   require('runtime-class') as RuntimeClassHelpers;
 const { markUncloneable } = require('serialization') as SerializationHelpers;
 const { internalArray } = require('url/internal-array') as InternalArrayHelpers;
@@ -593,15 +593,17 @@ function makeEnumerable(object: object, names: readonly PropertyKey[]): void {
   }
 }
 
-// WebIDL makes the tag non-writable; JSG's is writable.
+// WebIDL makes the tag non-writable; JSG's is writable. Pre-installed in the
+// baseline snapshot so modern contexts with `set_tostring_tag` do zero work.
 function markAsWebIdlClass(proto: object, name: string): void {
-  markAsRuntimeClass(proto, name);
-  if (compatFlags['set_tostring_tag'] === true) {
-    ObjectDefineProperty(proto, SymbolToStringTag, {
-      __proto__: null,
-      writable: false,
-    } as PropertyDescriptor);
-  }
+  ObjectDefineProperty(proto, SymbolToStringTag, {
+    __proto__: null,
+    value: name,
+    writable: false,
+    enumerable: false,
+    configurable: true,
+  } as PropertyDescriptor);
+  markAsRuntimeClassBase(proto);
 }
 
 const kUrlAttributes = [
@@ -684,8 +686,18 @@ ObjectSetPrototypeOf(kIteratorProto, IteratorPrototype);
 delete (kIteratorProto as { constructor?: unknown }).constructor;
 makeEnumerable(kIteratorProto, ['next']);
 
-// Per-context compat-flag wiring, called by main.ts once compatFlags are
-// populated. Keeps all class/prototype setup pre-evaluated in baseline snapshots.
+markAsWebIdlClass(URL.prototype, 'URL');
+markAsWebIdlClass(URLSearchParams.prototype, 'URLSearchParams');
+ObjectDefineProperty(kIteratorProto, SymbolToStringTag, {
+  __proto__: null,
+  value: 'URLSearchParams Iterator',
+  writable: false,
+  enumerable: false,
+  configurable: true,
+} as PropertyDescriptor);
+
+// Per-context compat-flag wiring, called once compatFlags are populated.
+// Keeps all class/prototype setup pre-evaluated in baseline snapshots.
 function configure(): void {
   const urlStandard = compatFlags['url_standard'] === true;
   backend = urlStandard ? adaBackend : kjBackend;
@@ -694,16 +706,16 @@ function configure(): void {
   kInstanceProperties =
     !urlStandard &&
     compatFlags['workers_api_getters_setters_on_prototype'] !== true;
-  markAsWebIdlClass(URL.prototype, 'URL');
-  markAsWebIdlClass(URLSearchParams.prototype, 'URLSearchParams');
-  if (compatFlags['set_tostring_tag'] === true) {
-    ObjectDefineProperty(kIteratorProto, SymbolToStringTag, {
-      __proto__: null,
-      value: 'URLSearchParams Iterator',
-      writable: false,
-      enumerable: false,
-      configurable: true,
-    } as PropertyDescriptor);
+  if (compatFlags['set_tostring_tag'] !== true) {
+    delete (URL.prototype as unknown as Record<symbol, unknown>)[
+      SymbolToStringTag
+    ];
+    delete (URLSearchParams.prototype as unknown as Record<symbol, unknown>)[
+      SymbolToStringTag
+    ];
+    delete (kIteratorProto as unknown as Record<symbol, unknown>)[
+      SymbolToStringTag
+    ];
   }
 }
 

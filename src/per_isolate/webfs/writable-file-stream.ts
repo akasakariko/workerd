@@ -52,7 +52,7 @@ const {
 
 const { createFileSystemWriteContext } = utils;
 
-const { DOMException } = require('dom-exception') as DomExceptionModule;
+const domExceptionMod = require('dom-exception') as DomExceptionModule;
 
 const { kNullProtoObject, kEnumerable } = require('webstreams/common');
 
@@ -200,7 +200,7 @@ function createWritable(
     // A DOMException means the file could not be opened, which createWritable
     // reports by rejecting. Anything else is the receiver check failing, which
     // JSG performs before the method body runs and so throws.
-    if (err instanceof DOMException) {
+    if (err instanceof domExceptionMod.DOMException) {
       return PromiseReject(err);
     }
     throw err;

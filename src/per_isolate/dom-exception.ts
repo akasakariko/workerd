@@ -34,6 +34,7 @@ const {
   ErrorCaptureStackTrace,
   NumberIsFinite,
   ObjectDefineProperties,
+  ObjectDefineProperty,
   ObjectFreeze,
   ObjectSetPrototypeOf,
   ReflectConstruct,
@@ -308,6 +309,11 @@ function install(): typeof DOMException {
   });
   ObjectDefineProperties(DOMException, constants());
   ObjectDefineProperties(proto, constants());
+  ObjectDefineProperty(proto, SymbolToStringTag, {
+    __proto__: null,
+    value: 'DOMException',
+    configurable: true,
+  } as PropertyDescriptor);
   return DOMException;
 }
 
@@ -324,52 +330,63 @@ function installQuotaExceededError(): typeof QuotaExceededError {
     },
     quota: { __proto__: null, enumerable: true },
     requested: { __proto__: null, enumerable: true },
+    [SymbolToStringTag]: {
+      __proto__: null,
+      value: 'QuotaExceededError',
+      configurable: true,
+    },
   });
   return QuotaExceededError;
 }
 
 const kUsingTsImpl = autogates['ts-dom-exception'] === true;
 
-const kDOMException: typeof DOMException = kUsingTsImpl
+const kDOMException: typeof DOMException | undefined = kUsingTsImpl
   ? install()
-  : (globalThis as unknown as { DOMException: typeof DOMException })
-      .DOMException;
+  : undefined;
 const kQuotaExceededError = kUsingTsImpl
   ? installQuotaExceededError()
   : undefined;
 
-// Per-context compat-flag wiring, called by main.ts once compatFlags are
-// populated. Allows the classes above to be pre-evaluated in a baseline
-// snapshot when `ts-dom-exception` is enabled.
-function configure(): void {
-  if (!kUsingTsImpl) return;
-  if (compatFlags['set_tostring_tag']) {
-    ObjectDefineProperties(DOMException.prototype, {
-      [SymbolToStringTag]: {
-        __proto__: null,
-        value: 'DOMException',
-        configurable: true,
-      },
-    });
-    ObjectDefineProperties(QuotaExceededError.prototype, {
-      [SymbolToStringTag]: {
-        __proto__: null,
-        value: 'QuotaExceededError',
-        configurable: true,
-      },
-    });
+const exportsObj: DomExceptionModule = {
+  DOMException: (kUsingTsImpl
+    ? kDOMException
+    : (globalThis as unknown as { DOMException: typeof DOMException })
+        .DOMException) as typeof DOMException,
+  QuotaExceededError: kQuotaExceededError,
+  configure,
+};
+if (kUsingTsImpl) {
+  ObjectFreeze(exportsObj);
+}
+
+// Per-context compat-flag wiring, called once compatFlags are populated.
+// Symbol.toStringTag is pre-installed in the baseline snapshot so modern
+// contexts do zero work here. When the TS implementation is disabled, captures
+// the context's C++ DOMException onto exportsObj and freezes it.
+function configure(global: unknown): void {
+  if (!kUsingTsImpl) {
+    (exportsObj as { DOMException: typeof DOMException }).DOMException = (
+      global as { DOMException: typeof DOMException }
+    ).DOMException;
+    ObjectFreeze(exportsObj);
+    return;
+  }
+  if (!compatFlags['set_tostring_tag']) {
+    delete (DOMException.prototype as unknown as Record<symbol, unknown>)[
+      SymbolToStringTag
+    ];
+    delete (QuotaExceededError.prototype as unknown as Record<symbol, unknown>)[
+      SymbolToStringTag
+    ];
   }
 }
 
 export type DomExceptionModule = {
-  DOMException: typeof DOMException;
+  readonly DOMException: typeof DOMException;
   // Only under the autogate.
-  QuotaExceededError: typeof QuotaExceededError | undefined;
-  configure: typeof configure;
+  readonly QuotaExceededError: typeof QuotaExceededError | undefined;
+  readonly configure: typeof configure;
 };
 
-module.exports = ObjectFreeze({
-  DOMException: kDOMException,
-  QuotaExceededError: kQuotaExceededError,
-  configure,
-});
+module.exports = exportsObj;
