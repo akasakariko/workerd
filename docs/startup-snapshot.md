@@ -344,6 +344,28 @@ once.
   that id out of the debug build's read-only-heap checksum and has a restored isolate continue
   past it, so that isolates of both kinds can share the heap.
 
+## Baseline snapshots
+
+An embedder can also capture one process-wide baseline snapshot via `buildBaselineSnapshot()`
+(`src/workerd/api/per-isolate-bootstrap.h`), containing a plain default context (no
+`ServiceWorkerGlobalScope` and no JSG wrappers) captured with `FunctionCodeHandling::kKeep` so
+bytecode is preserved across restores. The baseline snapshot holds `utils`, `autogates`, an empty
+mutable `compatFlags` object, `require()`, pre-evaluated heavy bootstrap modules (`primordials-js`,
+`serialization`, `runtime-class`, `events/event-target-internals`, `webstreams/*`,
+`crypto/digest-stream`, `webfs/writable-file-stream`, plus autogate-enabled `dom-exception`,
+`url/*`, `urlpattern/urlpattern`, and `structured-clone`), and pre-compiled functions for the
+remaining per-context scripts (`primordials`, `main`, `eventsource`, lazy `messagechannel`, and
+embedder scripts).
+
+- **Shared isolates (`jsg::BaselineSnapshot`)** boot from the baseline blob and its external
+  references, populate the shared `compatFlags` object in place for that context's
+  `CompatibilityFlags`, and run only the per-context wiring phase (`primordials`, `main`, embedder
+  `main`) against their `ServiceWorkerGlobalScope` template.
+- **Zygotes (`jsg::MutableSnapshot::base`)** pass the baseline artifact as `base`: `IsolateBase`
+  copies `base->externalReferences` as the prefix of the new artifact's table and initializes
+  `v8::SnapshotCreator` from `base->blob`, so the zygote starts from the baseline snapshot and
+  produces a self-contained per-worker `SnapshotArtifact`.
+
 ## Tests
 
 | Test                                                                 | Covers                                                                     |

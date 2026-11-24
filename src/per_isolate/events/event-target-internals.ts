@@ -70,7 +70,7 @@
 //   isTrusted, neither bubbling nor cancelable, an empty message and
 //   filename, and line and column 0.
 
-const { EventTarget } = primordials;
+const { jsg: jsgPrimordials } = primordials;
 
 const {
   setListenerCountHook,
@@ -85,11 +85,9 @@ const {
 
 type ExceptionPolicy = 'report' | 'propagate';
 
-const kSpecCompliantDispatchExceptions =
-  compatFlags['spec_compliant_dispatch_exceptions'] === true;
-
 function effectiveExceptionPolicy(desired: ExceptionPolicy): ExceptionPolicy {
-  return desired === 'report' && !kSpecCompliantDispatchExceptions
+  return desired === 'report' &&
+    compatFlags['spec_compliant_dispatch_exceptions'] !== true
     ? 'propagate'
     : desired;
 }
@@ -118,7 +116,9 @@ export type EventTargetInternals = {
 };
 
 module.exports = {
-  EventTarget,
+  get EventTarget(): typeof globalThis.EventTarget {
+    return jsgPrimordials.EventTarget;
+  },
   setListenerCountHook,
   getEventHandlerAttribute,
   setEventHandlerAttribute,

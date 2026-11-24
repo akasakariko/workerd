@@ -24,9 +24,7 @@ import type {
 } from './ring-buffer';
 
 const {
-  AbortController,
-  AbortControllerAbort,
-  AbortControllerSignalGet,
+  jsg: jsgPrimordials,
   ArrayBufferPrototypeByteLengthGet,
   NumberIsNaN,
   ObjectDefineProperties,
@@ -988,7 +986,7 @@ class WritableStreamDefaultController<
     controllerSignalAbort = (controller, reason) => {
       const ac = controller.#abortController;
       if (ac !== undefined) {
-        AbortControllerAbort(ac, reason);
+        jsgPrimordials.AbortControllerAbort(ac, reason);
       } else if (!controller.#signalAborted) {
         // Signaling abort a second time is a no-op, as for the signal.
         controller.#signalAborted = true;
@@ -1178,14 +1176,14 @@ class WritableStreamDefaultController<
     assertIsWritableStreamDefaultController(this);
     let ac = this.#abortController;
     if (ac === undefined) {
-      ac = new AbortController();
+      ac = new jsgPrimordials.AbortController();
       this.#abortController = ac;
       if (this.#signalAborted) {
-        AbortControllerAbort(ac, this.#signalAbortReason);
+        jsgPrimordials.AbortControllerAbort(ac, this.#signalAbortReason);
         this.#signalAbortReason = undefined;
       }
     }
-    return AbortControllerSignalGet(ac);
+    return jsgPrimordials.AbortControllerSignalGet(ac);
   }
 
   error(reason: unknown = undefined): void {

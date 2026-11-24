@@ -10,13 +10,10 @@ import type { SearchParamsEntry } from './backend';
 import type { InternalArrayHelpers } from './internal-array';
 
 const {
+  jsg: jsgPrimordials,
   StringPrototypeCharCodeAt,
   StringPrototypeIndexOf,
   StringPrototypeSlice,
-  TextDecoder,
-  TextDecoderDecode,
-  TextEncoder,
-  TextEncoderEncode,
   TypedArrayPrototypeGetBuffer,
   TypedArrayPrototypeGetByteOffset,
   TypedArrayPrototypeGetLength,
@@ -25,13 +22,29 @@ const {
 
 const { internalArray } = require('url/internal-array') as InternalArrayHelpers;
 
-const kEncoder = new TextEncoder();
-// UTF-8 decode without BOM: a leading U+FEFF is kept.
-const kDecoder = new TextDecoder('utf-8', {
-  __proto__: null,
-  fatal: false,
-  ignoreBOM: true,
-} as TextDecoderOptions);
+// Lazily instantiated so this module can be pre-evaluated in a baseline
+// snapshot without allocating JSG wrappers.
+let kEncoder: TextEncoder | undefined;
+let kDecoder: TextDecoder | undefined;
+
+function getEncoder(): TextEncoder {
+  if (kEncoder === undefined) {
+    kEncoder = new jsgPrimordials.TextEncoder() as TextEncoder;
+  }
+  return kEncoder;
+}
+
+function getDecoder(): TextDecoder {
+  // UTF-8 decode without BOM: a leading U+FEFF is kept.
+  if (kDecoder === undefined) {
+    kDecoder = new jsgPrimordials.TextDecoder('utf-8', {
+      __proto__: null,
+      fatal: false,
+      ignoreBOM: true,
+    } as TextDecoderOptions) as TextDecoder;
+  }
+  return kDecoder;
+}
 
 const kPercent = 0x25;
 const kPlus = 0x2b;
@@ -66,7 +79,7 @@ function decodeComponent(input: string): string {
       ? input
       : replacePlus(input);
   }
-  const bytes = TextEncoderEncode(kEncoder, input);
+  const bytes = jsgPrimordials.TextEncoderEncode(getEncoder(), input);
   const length = TypedArrayPrototypeGetLength(bytes);
   let out = 0;
   for (let i = 0; i < length; i++) {
@@ -87,8 +100,8 @@ function decodeComponent(input: string): string {
     }
   }
   // Not subarray(), which consults the species constructor.
-  return TextDecoderDecode(
-    kDecoder,
+  return jsgPrimordials.TextDecoderDecode(
+    getDecoder(),
     new Uint8Array(
       TypedArrayPrototypeGetBuffer(bytes),
       TypedArrayPrototypeGetByteOffset(bytes),
@@ -181,7 +194,10 @@ function serializeComponent(input: string): string {
     i++;
   }
   if (i === length) return result;
-  const bytes = TextEncoderEncode(kEncoder, StringPrototypeSlice(input, i));
+  const bytes = jsgPrimordials.TextEncoderEncode(
+    getEncoder(),
+    StringPrototypeSlice(input, i)
+  );
   const byteLength = TypedArrayPrototypeGetLength(bytes);
   for (let b = 0; b < byteLength; b++) {
     result += kByteEncodings[bytes[b] as number] as string;

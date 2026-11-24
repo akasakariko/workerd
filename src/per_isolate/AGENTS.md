@@ -49,6 +49,19 @@ at context creation, before any user code. C++ entry point:
   through `events/event-target-internals`; see `events/AGENTS.md`.
 - Modules get `DOMException` from `require('dom-exception')`, which
   `main.ts` loads first, not from the global or `primordials`.
+- Pure ECMAScript primordials live in `primordials-js.ts` (strict leaf, no
+  `require()`, no `compatFlags`, no JSG globals) alongside a `jsg` container
+  object that `primordials.ts` populates from `globalThis` and freezes once per
+  context. Process-wide baseline snapshots (`buildBaselineSnapshot()` in
+  `per-isolate-bootstrap.h`) pre-evaluate `primordials-js` and the heavy
+  compat-flag-independent modules (`serialization`, `runtime-class`,
+  `events/event-target-internals`, `webstreams/*`, `crypto/digest-stream`,
+  `webfs/writable-file-stream`, plus autogated `dom-exception`, `url/*`,
+  `urlpattern/urlpattern`, and `structured-clone`), keeping bytecode via
+  `FunctionCodeHandling::kKeep`. Any module pre-evaluated in the baseline
+  snapshot must read JSG globals through `primordials.jsg`, read `compatFlags`
+  dynamically (or in a `configure()` hook invoked by `main.ts`), and avoid
+  allocating JSG wrappers at module load time.
 - Files are auto-discovered (`BUILD.bazel` and `tsconfig.json` both glob
   `**/*.ts`). No registration needed for new files.
 - Local convention: no copyright headers in this directory's bootstrap

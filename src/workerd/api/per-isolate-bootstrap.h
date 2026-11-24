@@ -8,8 +8,13 @@
 #include <workerd/jsg/jsg.h>
 #include <workerd/jsg/module-source.h>
 #include <workerd/jsg/modules.capnp.h>
+#include <workerd/jsg/snapshot.h>
 
 #include <kj/map.h>
+
+namespace workerd::jsg {
+class V8System;
+}  // namespace workerd::jsg
 
 namespace workerd {
 
@@ -44,6 +49,10 @@ class EmbedderBootstrap {
   }
 
   kj::Maybe<jsg::Module::Reader> tryGetScript(kj::StringPtr specifier) const;
+
+  const kj::HashMap<kj::StringPtr, jsg::Module::Reader>& getScripts() const {
+    return scripts;
+  }
 
  private:
   kj::String prefix;
@@ -119,6 +128,19 @@ jsg::JsValue requireBootstrapExport(jsg::Lock& js, kj::StringPtr specifier);
 // name skip the property get.
 kj::Maybe<jsg::JsFunction> tryGetBootstrapFunction(
     jsg::Lock& js, kj::StringPtr specifier, kj::StringPtr name);
+
+// Builds a process-wide baseline V8 startup snapshot into `artifact`, containing a plain default
+// context with the per-isolate bootstrap's compat-flag-independent state: `utils`, `autogates`,
+// `require()`, pre-compiled functions for every bootstrap script (and `embedder`, if given), and
+// pre-evaluated pure-JS bootstrap modules (`primordials-js`, `serialization`, pure-JS webstreams
+// and URL helpers). Because the snapshot carries no ServiceWorkerGlobalScope, no JSG wrappers,
+// and no CompatibilityFlags-dependent state, every isolate in the process (both shared isolates
+// via jsg::BaselineSnapshot and ephemeral zygotes via jsg::MutableSnapshot::base) can boot from
+// it and run only the per-context wiring phase in runPerIsolateBootstrap().
+kj::Own<jsg::SnapshotArtifact> buildBaselineSnapshot(jsg::V8System& v8System,
+    kj::Own<jsg::SnapshotArtifact> artifact,
+    kj::Maybe<const EmbedderBootstrap&> embedder = kj::none,
+    const jsg::ModuleSource* moduleSource = nullptr);
 
 // Makes `exports` the exports of the bootstrap module `specifier`, as though the module had been
 // required, so that a test can define classes that the deserializer finds by their

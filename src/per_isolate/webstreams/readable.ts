@@ -42,8 +42,7 @@ type AnyReadableController =
 type ReadableStreamState = 'readable' | 'closed' | 'errored';
 
 const {
-  AbortSignalAbortedGet,
-  AbortSignalReasonGet,
+  jsg: jsgPrimordials,
   AggregateError,
   ArrayBuffer,
   ArrayBufferPrototypeByteLengthGet,
@@ -2887,7 +2886,7 @@ function convertPipeOptions(options: unknown): ConvertedPipeOptions {
     // under old dates only; the native fast path's C++ unwrap rejects it.)
     let aborted: unknown;
     try {
-      aborted = AbortSignalAbortedGet(signal);
+      aborted = jsgPrimordials.AbortSignalAbortedGet(signal);
     } catch {
       throw new TypeError('options.signal must be an AbortSignal');
     }
@@ -3205,10 +3204,10 @@ function pipeToInternal<R>(
   // cannot abort the pipe and a user listener cannot prevent it.
   if (signal !== undefined) {
     const abortAlgorithm = (): void => {
-      const abortReason = AbortSignalReasonGet(signal);
+      const abortReason = jsgPrimordials.AbortSignalReasonGet(signal);
       shutdownWithAction(failureAction(abortReason), { reason: abortReason });
     };
-    if (AbortSignalAbortedGet(signal)) {
+    if (jsgPrimordials.AbortSignalAbortedGet(signal)) {
       abortAlgorithm();
     } else {
       abortRegistration = utils.addAbortAlgorithm(signal, abortAlgorithm);

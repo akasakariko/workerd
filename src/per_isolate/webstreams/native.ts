@@ -148,11 +148,7 @@ import type { CommonHelpers } from './common';
 import type { ViewExtentHelpers } from './view-extent';
 
 const {
-  AbortController,
-  AbortControllerAbort,
-  AbortControllerSignalGet,
-  AbortSignalAbortedGet,
-  AbortSignalReasonGet,
+  jsg: jsgPrimordials,
   BigInt,
   NumberIsNaN,
   ObjectGetOwnPropertyDescriptor,
@@ -655,11 +651,12 @@ class NativePullConduit implements ByteStreamConsumerType {
     const pullAlgorithm = this.#pullAlgorithm;
     if (pullAlgorithm === undefined) return;
     if (this.#pullAbortController !== undefined) return;
-    const ac = this.#spareAbortController ?? new AbortController();
+    const ac =
+      this.#spareAbortController ?? new jsgPrimordials.AbortController();
     this.#spareAbortController = undefined;
     this.#pullAbortController = ac;
     this.#deliveredThisPull = false;
-    const signal = AbortControllerSignalGet(ac);
+    const signal = jsgPrimordials.AbortControllerSignalGet(ac);
     markPromiseHandled(
       PromisePrototypeThen(
         pullAlgorithm(this.#controller, signal),
@@ -670,7 +667,7 @@ class NativePullConduit implements ByteStreamConsumerType {
           // broken source. Error the stream to prevent a busy-loop
           // re-pull against a source that will never deliver.
           if (
-            !AbortSignalAbortedGet(signal) &&
+            !jsgPrimordials.AbortSignalAbortedGet(signal) &&
             !this.#deliveredThisPull &&
             this.#status === 'active' &&
             this.#requests.length > 0
@@ -688,8 +685,8 @@ class NativePullConduit implements ByteStreamConsumerType {
         (e: unknown) => {
           this.#settlePull(ac, signal);
           if (
-            AbortSignalAbortedGet(signal) &&
-            e === AbortSignalReasonGet(signal)
+            jsgPrimordials.AbortSignalAbortedGet(signal) &&
+            e === jsgPrimordials.AbortSignalReasonGet(signal)
           ) {
             this.pullIfNeeded();
           } else {
@@ -702,7 +699,8 @@ class NativePullConduit implements ByteStreamConsumerType {
 
   #settlePull(ac: AbortController, signal: AbortSignal): void {
     this.#pullAbortController = undefined;
-    if (!AbortSignalAbortedGet(signal)) this.#spareAbortController = ac;
+    if (!jsgPrimordials.AbortSignalAbortedGet(signal))
+      this.#spareAbortController = ac;
   }
 
   // Aborts the in-flight pull's signal. #pullAbortController is
@@ -714,7 +712,7 @@ class NativePullConduit implements ByteStreamConsumerType {
     if (ac === undefined) return;
     this.#deliveredThisPull = false;
     this.#byobRequestCache = null;
-    AbortControllerAbort(ac, reason);
+    jsgPrimordials.AbortControllerAbort(ac, reason);
   }
 
   // --- The source-facing operations (via the controller facade) -------------

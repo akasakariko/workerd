@@ -98,6 +98,14 @@ declare const primordials: {
   };
   readonly PromiseReject: <T = never>(reason?: unknown) => Promise<T>;
 
+  // Per-context JSG runtime built-in captures (AbortController, AbortSignal,
+  // EventTarget, BlobPrototypeSlice, TextDecoder, TextEncoder), populated and
+  // frozen by primordials.ts before any user code runs. Pre-evaluated baseline
+  // modules read JSG globals through this container at call time.
+  readonly jsg: {
+    readonly [key: string]: any;
+  };
+
   // Everything else is loosely typed — add specific entries as needed.
   readonly [key: string]: any;
 };

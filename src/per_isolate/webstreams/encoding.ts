@@ -21,16 +21,12 @@ import type { CommonHelpers } from './common';
 import type { SerializationHelpers } from '../serialization';
 
 const {
+  jsg: jsgPrimordials,
   ObjectDefineProperties,
   ObjectFreeze,
   StringPrototypeCharCodeAt,
   StringPrototypeSlice,
   SymbolToStringTag,
-  TextDecoderEncodingGet,
-  TextDecoder,
-  TextDecoderFatalGet,
-  TextDecoderIgnoreBOMGet,
-  TextDecoderDecode,
   TypeError,
   getProtoGetter,
   uncurryThis,
@@ -193,7 +189,7 @@ class TextDecoderStream {
 
   constructor(label: string = 'utf-8', options?: TextDecoderStreamOptions) {
     markUncloneable(this);
-    const decoder = new TextDecoder(label, options);
+    const decoder = new jsgPrimordials.TextDecoder(label, options);
     this.#decoder = decoder;
 
     const transform = (chunk: unknown, controller: object): void => {
@@ -207,7 +203,7 @@ class TextDecoderStream {
       ) {
         throw new TypeError('TextDecoderStream: chunk must be a BufferSource');
       }
-      const decoded = TextDecoderDecode(
+      const decoded = jsgPrimordials.TextDecoderDecode(
         decoder,
         chunk as BufferSource,
         kDecodeStreamOptions
@@ -219,7 +215,7 @@ class TextDecoderStream {
     const flush = (controller: object): void => {
       // Final decode: flushes any incomplete multi-byte sequences.
       // In fatal mode this throws if the sequence is incomplete.
-      const decoded = TextDecoderDecode(decoder);
+      const decoded = jsgPrimordials.TextDecoderDecode(decoder);
       if (decoded.length > 0) {
         transformControllerEnqueue(controller, decoded);
       }
@@ -239,17 +235,17 @@ class TextDecoderStream {
 
   get encoding(): string {
     assertIsTextDecoderStream(this);
-    return TextDecoderEncodingGet(this.#decoder);
+    return jsgPrimordials.TextDecoderEncodingGet(this.#decoder);
   }
 
   get fatal(): boolean {
     assertIsTextDecoderStream(this);
-    return TextDecoderFatalGet(this.#decoder);
+    return jsgPrimordials.TextDecoderFatalGet(this.#decoder);
   }
 
   get ignoreBOM(): boolean {
     assertIsTextDecoderStream(this);
-    return TextDecoderIgnoreBOMGet(this.#decoder);
+    return jsgPrimordials.TextDecoderIgnoreBOMGet(this.#decoder);
   }
 
   get readable(): ReadableStreamType<string> {

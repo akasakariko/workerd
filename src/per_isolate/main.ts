@@ -39,7 +39,12 @@ const { ObjectDefineProperties, ObjectGetPrototypeOf } = primordials;
 require('serialization');
 
 // Loaded before any module that may create or recognize a DOMException.
-const { DOMException, QuotaExceededError } = require('dom-exception');
+const {
+  DOMException,
+  QuotaExceededError,
+  configure: configureDomException,
+} = require('dom-exception');
+configureDomException();
 
 // The TypeScript DOMException replaces the C++ one, which global-scope.h then
 // leaves out, and adds QuotaExceededError, which the C++ one lacks. Installed
@@ -380,7 +385,12 @@ if (compatFlags['spec_compliant_property_attributes']) {
 // global-scope.h then leaves out. Installed as WebIDL installs an interface:
 // own, non-enumerable properties of the global, and not on its prototype.
 if (autogates['ts-url']) {
-  const { URL, URLSearchParams } = require('url/url');
+  const {
+    URL,
+    URLSearchParams,
+    configure: configureUrl,
+  } = require('url/url');
+  configureUrl();
   // The C++ bridge's functions, which it finds already loaded.
   require('url/cpp_exports');
   ObjectDefineProperties(globalThis, {
@@ -404,7 +414,11 @@ if (autogates['ts-url']) {
 // The TypeScript URLPattern replaces the C++ ones, which global-scope.h then
 // leaves out, installed as URL is.
 if (autogates['ts-url-pattern']) {
-  const { URLPattern } = require('urlpattern/urlpattern');
+  const {
+    URLPattern,
+    configure: configureUrlPattern,
+  } = require('urlpattern/urlpattern');
+  configureUrlPattern();
   ObjectDefineProperties(globalThis, {
     URLPattern: {
       __proto__: null,
@@ -421,7 +435,11 @@ if (autogates['ts-url-pattern']) {
 // ServiceWorkerGlobalScope.prototype, with the same attributes (all three
 // true).
 if (autogates['ts-structured-clone']) {
-  const { structuredClone } = require('structured-clone');
+  const {
+    structuredClone,
+    configure: configureStructuredClone,
+  } = require('structured-clone');
+  configureStructuredClone(globalThis);
   ObjectDefineProperties(ObjectGetPrototypeOf(globalThis), {
     __proto__: null,
     structuredClone: {

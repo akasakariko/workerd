@@ -22,7 +22,9 @@ const {
 const { structuredClone: nativeStructuredClone } = utils;
 
 // The global proxy, which is the receiver of `globalThis.structuredClone(v)`.
-const globalReceiver: unknown = globalThis;
+// Set per context by configure() so this module can be pre-evaluated in a
+// baseline snapshot.
+let globalReceiver: unknown = globalThis;
 
 // The C++ texts, kept where the behaviour matches.
 const ILLEGAL_INVOCATION =
@@ -126,4 +128,8 @@ ObjectDefineProperty(structuredClone, 'length', {
   value: 1,
 });
 
-module.exports = { structuredClone };
+function configure(global: unknown): void {
+  globalReceiver = global;
+}
+
+module.exports = { structuredClone, configure };

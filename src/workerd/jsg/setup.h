@@ -630,6 +630,16 @@ class IsolateBase {
     return false;
   }
 
+  bool isStartingFromBaselineSnapshot() const {
+    KJ_IF_SOME(c, snapshotConfig) {
+      if (c.is<BaselineSnapshot>()) return true;
+      KJ_IF_SOME(m, c.tryGet<MutableSnapshot>()) {
+        return m.base != kj::none;
+      }
+    }
+    return false;
+  }
+
   // Pins `data` into the snapshot of `context` and returns its index, which the restored context
   // later passes to extractOnceFromSnapshot(). Indices are assigned in call order.
   // Only valid while preparing a snapshot; the caller is inside a handle scope.
@@ -706,6 +716,14 @@ class IsolateBase {
     return *KJ_REQUIRE_NONNULL(snapshotConfig).get<FinalizedSnapshot>().artifact;
   }
 
+  const SnapshotArtifact& baselineSnapshotArtifact() const {
+    auto& c = KJ_REQUIRE_NONNULL(snapshotConfig);
+    KJ_IF_SOME(b, c.tryGet<BaselineSnapshot>()) {
+      return *b.artifact;
+    }
+    return *KJ_REQUIRE_NONNULL(c.get<MutableSnapshot>().base);
+  }
+
   kj::Own<SnapshotArtifact> extractSnapshotArtifact() {
     return kj::mv(KJ_REQUIRE_NONNULL(snapshotConfig).get<MutableSnapshot>().artifact);
   }
@@ -750,7 +768,9 @@ class IsolateBase {
       kj::Vector<v8::Global<v8::FunctionTemplate>> extraTemplateHandles,
       const uint32_t* badTagFieldsCount,
       WrappablesSerializeMetadata* wrappablesMetadata,
-      kj::Vector<SnapshotArtifact::ListenerRecord> listenerRecords = {});
+      kj::Vector<SnapshotArtifact::ListenerRecord> listenerRecords = {},
+      v8::SnapshotCreator::FunctionCodeHandling codeHandling =
+          v8::SnapshotCreator::FunctionCodeHandling::kClear);
 
   void registerExternalReference(intptr_t addr) {
     if (!isPreparingSnapshot()) return;
@@ -879,9 +899,10 @@ class IsolateBase {
   v8::Isolate* ptr;
   // Determines how the isolate was created:
   //  * kj::none: plain `v8::Isolate::New(params)`, no SnapshotCreator. The default.
-  //  * MutableSnapshot: an isolate constructed via `v8::SnapshotCreator`, which is used later
-  //    to serialize a startup snapshot.
-  //  * FinalizedSnapshot: an isolate initialized from a previously-produced snapshot blob.
+  //  * MutableSnapshot: an isolate constructed via `v8::SnapshotCreator` (optionally initialized
+  //    from a baseline snapshot), which is used later to serialize a startup snapshot.
+  //  * FinalizedSnapshot: an isolate initialized from a previously-produced per-worker snapshot.
+  //  * BaselineSnapshot: an isolate initialized from a process-wide baseline snapshot.
   kj::Maybe<SnapshotConfig> snapshotConfig;
   // The first FAIL_CLOSED restore-time property the zygote's top level used, if any. Set by the
   // property's getter or setter; removeRestoreTimeGlobalsBeforeSnapshot() fails the zygote on it.
@@ -1297,7 +1318,9 @@ class Isolate: public IsolateBase {
   void iterateResourceTypeTemplates(
       kj::FunctionParam<void(v8::Global<v8::FunctionTemplate>&)> cb) override {
     if (!hasExtraWrappers) {
-      wrappers[0]->iterateResourceTypeTemplates(cb);
+      if (wrappers[0].get() != nullptr) {
+        wrappers[0]->iterateResourceTypeTemplates(cb);
+      }
     } else {
       KJ_FAIL_ASSERT("Not yet implemented");
     }
@@ -1311,7 +1334,9 @@ class Isolate: public IsolateBase {
   void visitStructTypeHandles(kj::FunctionParam<void(v8::Global<v8::Name>&)> visitName,
       kj::FunctionParam<void(v8::Global<v8::DictionaryTemplate>&)> visitDictTmpl) override {
     if (!hasExtraWrappers) {
-      wrappers[0]->visitStructTypeHandles(visitName, visitDictTmpl);
+      if (wrappers[0].get() != nullptr) {
+        wrappers[0]->visitStructTypeHandles(visitName, visitDictTmpl);
+      }
     } else {
       KJ_FAIL_ASSERT("Not yet implemented");
     }

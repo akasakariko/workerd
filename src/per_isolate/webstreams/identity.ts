@@ -105,10 +105,9 @@ const {
   PromiseResolve,
   PromiseWithResolvers,
   RangeError,
+  jsg: jsgPrimordials,
   Symbol,
   SymbolToStringTag,
-  TextEncoder,
-  TextEncoderEncode,
   TypeError,
   TypedArrayPrototypeGetBuffer,
   TypedArrayPrototypeGetByteLength,
@@ -176,8 +175,10 @@ const byobRequestRespond = uncurryThis(
   ReadableStreamBYOBRequest.prototype.respond
 ) as (request: object, bytesWritten: number) => void;
 
-// TextEncoder instance for string -> UTF-8 conversion.
-const textEncoderInstance = new TextEncoder();
+// Lazily created TextEncoder instance for string -> UTF-8 conversion (deferred
+// so this module can be pre-evaluated in a baseline snapshot with no JSG
+// wrappers).
+let textEncoderInstance: TextEncoder | undefined;
 
 // ---------------------------------------------------------------------------
 // Chunk validation and copy
@@ -192,7 +193,8 @@ function validateAndCopyChunk(chunk: unknown): Uint8Array | undefined {
   if (chunk === undefined) return undefined;
   if (typeof chunk === 'string') {
     if (chunk.length === 0) return undefined;
-    return TextEncoderEncode(textEncoderInstance, chunk);
+    textEncoderInstance ??= new jsgPrimordials.TextEncoder();
+    return jsgPrimordials.TextEncoderEncode(textEncoderInstance, chunk);
   }
   // A detached or out-of-bounds input is empty (see view-extent.ts).
   const extent = bufferSourceExtent(chunk);

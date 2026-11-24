@@ -25,7 +25,7 @@ import type { RuntimeClassHelpers } from '../runtime-class';
 import type { SerializationHelpers } from '../serialization';
 
 const {
-  BlobPrototypeSlice,
+  jsg: jsgPrimordials,
   Error,
   FunctionPrototypeCall,
   IteratorPrototype,
@@ -58,18 +58,16 @@ const { markAsRuntimeClass, setNameAndLength } =
 const { markUncloneable } = require('serialization') as SerializationHelpers;
 const { internalArray } = require('url/internal-array') as InternalArrayHelpers;
 
-// Only the selected backend is loaded.
-const backend = require(
-  compatFlags['url_standard'] === true ? 'url/ada-backend' : 'url/kj-backend'
-) as UrlBackend<unknown>;
+// Both backends are pure-JS leaves and pre-evaluated in baseline snapshots;
+// configure() selects the active one per context from compatFlags.
+const adaBackend = require('url/ada-backend') as UrlBackend<unknown>;
+const kjBackend = require('url/kj-backend') as UrlBackend<unknown>;
 
-const kDeleteHasValueArg =
-  compatFlags['urlsearchparams_delete_has_value_arg'] === true;
+let backend: UrlBackend<unknown> = adaBackend;
+let kDeleteHasValueArg = false;
 // The legacy C++ URL's attributes are own properties of each instance unless
 // workers_api_getters_setters_on_prototype; the standard one's never are.
-const kInstanceProperties =
-  compatFlags['url_standard'] !== true &&
-  compatFlags['workers_api_getters_setters_on_prototype'] !== true;
+let kInstanceProperties = false;
 
 const { getPrivateSymbol } = utils;
 
@@ -381,7 +379,7 @@ class URL {
     const what = "Failed to execute 'createObjectURL' on 'URL'";
     requireArguments(arguments.length, 1, what);
     try {
-      BlobPrototypeSlice(object as Blob, 0, 0);
+      jsgPrimordials.BlobPrototypeSlice(object as Blob, 0, 0);
     } catch {
       throw new TypeError(`${what}: parameter 1 is not of type 'Blob'.`);
     }
@@ -631,7 +629,6 @@ makeEnumerable(URL, [
 setNameAndLength(URL, 'URL', 1);
 setNameAndLength(URL.canParse, 'canParse', 1);
 setNameAndLength(URL.parse, 'parse', 1);
-markAsWebIdlClass(URL.prototype, 'URL');
 
 // The legacy instance layout: the prototype's accessors, again as own
 // properties of each instance, in the order JSG defines them (the reverse
@@ -681,20 +678,33 @@ ObjectDefineProperty(URLSearchParams.prototype, SymbolIterator, {
   enumerable: false,
   configurable: true,
 } as PropertyDescriptor);
-markAsWebIdlClass(URLSearchParams.prototype, 'URLSearchParams');
 
 const kIteratorProto = URLSearchParamsIterator.prototype;
 ObjectSetPrototypeOf(kIteratorProto, IteratorPrototype);
 delete (kIteratorProto as { constructor?: unknown }).constructor;
 makeEnumerable(kIteratorProto, ['next']);
-if (compatFlags['set_tostring_tag'] === true) {
-  ObjectDefineProperty(kIteratorProto, SymbolToStringTag, {
-    __proto__: null,
-    value: 'URLSearchParams Iterator',
-    writable: false,
-    enumerable: false,
-    configurable: true,
-  } as PropertyDescriptor);
+
+// Per-context compat-flag wiring, called by main.ts once compatFlags are
+// populated. Keeps all class/prototype setup pre-evaluated in baseline snapshots.
+function configure(): void {
+  const urlStandard = compatFlags['url_standard'] === true;
+  backend = urlStandard ? adaBackend : kjBackend;
+  kDeleteHasValueArg =
+    compatFlags['urlsearchparams_delete_has_value_arg'] === true;
+  kInstanceProperties =
+    !urlStandard &&
+    compatFlags['workers_api_getters_setters_on_prototype'] !== true;
+  markAsWebIdlClass(URL.prototype, 'URL');
+  markAsWebIdlClass(URLSearchParams.prototype, 'URLSearchParams');
+  if (compatFlags['set_tostring_tag'] === true) {
+    ObjectDefineProperty(kIteratorProto, SymbolToStringTag, {
+      __proto__: null,
+      value: 'URLSearchParams Iterator',
+      writable: false,
+      enumerable: false,
+      configurable: true,
+    } as PropertyDescriptor);
+  }
 }
 
 // For the C++ bridge, through url/cpp_exports: each reads the
@@ -713,10 +723,12 @@ export type UrlExports = {
   URL: typeof URL;
   URLSearchParams: typeof URLSearchParams;
   cppExports: typeof cppExports;
+  configure: typeof configure;
 };
 
 module.exports = {
   URL,
   URLSearchParams,
   cppExports,
+  configure,
 };

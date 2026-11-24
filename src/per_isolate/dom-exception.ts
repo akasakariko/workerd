@@ -308,15 +308,6 @@ function install(): typeof DOMException {
   });
   ObjectDefineProperties(DOMException, constants());
   ObjectDefineProperties(proto, constants());
-  if (compatFlags['set_tostring_tag']) {
-    ObjectDefineProperties(proto, {
-      [SymbolToStringTag]: {
-        __proto__: null,
-        value: 'DOMException',
-        configurable: true,
-      },
-    });
-  }
   return DOMException;
 }
 
@@ -334,15 +325,6 @@ function installQuotaExceededError(): typeof QuotaExceededError {
     quota: { __proto__: null, enumerable: true },
     requested: { __proto__: null, enumerable: true },
   });
-  if (compatFlags['set_tostring_tag']) {
-    ObjectDefineProperties(proto, {
-      [SymbolToStringTag]: {
-        __proto__: null,
-        value: 'QuotaExceededError',
-        configurable: true,
-      },
-    });
-  }
   return QuotaExceededError;
 }
 
@@ -352,14 +334,42 @@ const kDOMException: typeof DOMException = kUsingTsImpl
   ? install()
   : (globalThis as unknown as { DOMException: typeof DOMException })
       .DOMException;
+const kQuotaExceededError = kUsingTsImpl
+  ? installQuotaExceededError()
+  : undefined;
+
+// Per-context compat-flag wiring, called by main.ts once compatFlags are
+// populated. Allows the classes above to be pre-evaluated in a baseline
+// snapshot when `ts-dom-exception` is enabled.
+function configure(): void {
+  if (!kUsingTsImpl) return;
+  if (compatFlags['set_tostring_tag']) {
+    ObjectDefineProperties(DOMException.prototype, {
+      [SymbolToStringTag]: {
+        __proto__: null,
+        value: 'DOMException',
+        configurable: true,
+      },
+    });
+    ObjectDefineProperties(QuotaExceededError.prototype, {
+      [SymbolToStringTag]: {
+        __proto__: null,
+        value: 'QuotaExceededError',
+        configurable: true,
+      },
+    });
+  }
+}
 
 export type DomExceptionModule = {
   DOMException: typeof DOMException;
   // Only under the autogate.
   QuotaExceededError: typeof QuotaExceededError | undefined;
+  configure: typeof configure;
 };
 
 module.exports = ObjectFreeze({
   DOMException: kDOMException,
-  QuotaExceededError: kUsingTsImpl ? installQuotaExceededError() : undefined,
+  QuotaExceededError: kQuotaExceededError,
+  configure,
 });
