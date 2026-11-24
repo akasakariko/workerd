@@ -490,7 +490,7 @@ fn load_config<T: CommandFactory>(
             usage_error::<T>(format!("{name}: A wrangler config has no named constants."));
         }
         if !std::path::Path::new(&config_file).is_file() {
-            usage_error::<T>(format!("{config_file}: No such file."));
+            usage_error::<T>(wrangler::missing_config(&config_file));
         }
         let data_dir = data_dir.map(std::path::Path::new);
         return wrangler::load(&config_file, process, options, data_dir, experimental)
