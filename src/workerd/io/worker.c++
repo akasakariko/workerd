@@ -23,7 +23,6 @@
 #include <workerd/io/tracer.h>
 #include <workerd/io/tracked-wasm-instance.h>
 #include <workerd/io/validation.h>
-#include <workerd/io/wasm-instantiate-shim.embed.h>
 #include <workerd/io/worker-source-stats.h>
 #include <workerd/io/worker.h>
 #include <workerd/jsg/async-context.h>
@@ -1586,9 +1585,9 @@ Worker::Script::Script(kj::Own<const Isolate> isolateParam,
             }));
         mContext->enableWarningOnSpecialEvents();
         context = mContext.getHandle(lock);
-        recordedLock.setupContext(context);
-
         maybePerIsolateBootstrap(isolate->getApi(), lock, context);
+
+        recordedLock.setupContext(context);
 
         if (lock.isStartingFromSnapshot()) {
           auto& isolateBase = jsg::IsolateBase::from(lock.v8Isolate);
@@ -1990,13 +1989,16 @@ void shimWebAssemblyInstantiate(jsg::Lock& lock, v8::Local<v8::Context> context)
   };
   auto registerFn = jsg::check(v8::Function::New(context, registerCb));
 
-  // Build the shim in JavaScript. It wraps both WebAssembly.instantiate (async) and
-  // WebAssembly.Instance (sync constructor).
-  auto shimScript =
-      jsg::NonModuleScript::compile(lock, WASM_INSTANTIATE_SHIM, "wasm-instantiate-shim.js"_kj);
-  auto shimFn = KJ_ASSERT_NONNULL(shimScript.runAndReturn(lock).tryCast<jsg::JsFunction>());
-
-  // Call the factory — it mutates `WebAssembly` in place.
+  // Call the pre-evaluated (or compile-cached) per-isolate bootstrap shim installer — it mutates
+  // `WebAssembly` in place.
+  auto shimFn = [&]() -> jsg::JsFunction {
+    KJ_IF_SOME(fn, tryGetBootstrapFunction(lock, "wasm-instantiate-shim"_kj, "install"_kj)) {
+      return fn;
+    }
+    auto exports = KJ_ASSERT_NONNULL(
+        requireBootstrapExport(lock, "wasm-instantiate-shim"_kj).tryCast<jsg::JsObject>());
+    return KJ_ASSERT_NONNULL(exports.get(lock, "install"_kj).tryCast<jsg::JsFunction>());
+  }();
   shimFn.call(lock, lock.global(), jsg::JsFunction(registerFn));
 }
 
