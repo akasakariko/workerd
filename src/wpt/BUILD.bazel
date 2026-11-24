@@ -370,6 +370,7 @@ wpt_test(
 
 wpt_test(
     name = "console",
+    compat_flags = ["console_label_conversion_standard"],
     config = "console-test.ts",
     wpt_directory = "@wpt//:console@module",
 )
