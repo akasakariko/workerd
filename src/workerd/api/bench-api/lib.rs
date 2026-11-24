@@ -41,8 +41,9 @@ use options::parse_duration;
 /// The warmup, when neither the case nor the command line sets one.
 const DEFAULT_WARMUP_NS: u64 = 200_000_000;
 
-/// Under `--quick`, warmups are capped at this.
-const QUICK_WARMUP_NS: u64 = 2_000_000;
+/// Under `--quick`, warmups are capped at this: none, as for startup groups. The calibration call
+/// still runs each case once before it is sampled.
+const QUICK_WARMUP_NS: u64 = 0;
 
 /// The most calls a batch makes.
 const MAX_CALLS_PER_BATCH: u64 = 1 << 40;
