@@ -1915,32 +1915,25 @@ void Worker::Isolate::registerTrackedWasmInstance(jsg::Lock& js,
 //
 // The instanceof operator can be changed by setting the @@HasInstance method
 // on the object, https://tc39.es/ecma262/#sec-instanceofoperator.
-void setWebAssemblyModuleHasInstance(jsg::Lock& lock, v8::Local<v8::Context> context) {
-  JSG_WITHIN_CONTEXT_SCOPE(lock, context, [&](jsg::Lock& lock) {
-    auto instanceof = [](const v8::FunctionCallbackInfo<v8::Value>& info) {
-      jsg::Lock::from(info.GetIsolate()).withinHandleScope([&] {
-        info.GetReturnValue().Set(info[0]->IsWasmModuleObject());
-      });
-    };
-    v8::Local<v8::Function> function = jsg::check(v8::Function::New(context, instanceof));
+void setWebAssemblyModuleHasInstance(
+    jsg::Lock& lock, v8::Local<v8::Context> context, jsg::JsObject webAssembly) {
+  auto instanceof = [](const v8::FunctionCallbackInfo<v8::Value>& info) {
+    jsg::Lock::from(info.GetIsolate()).withinHandleScope([&] {
+      info.GetReturnValue().Set(info[0]->IsWasmModuleObject());
+    });
+  };
+  v8::Local<v8::Function> function = jsg::check(v8::Function::New(context, instanceof));
 
-    auto webAssembly =
-        KJ_ASSERT_NONNULL(lock.global().get(lock, "WebAssembly").tryCast<jsg::JsObject>());
-    auto module = KJ_ASSERT_NONNULL(webAssembly.get(lock, "Module").tryCast<jsg::JsObject>());
+  auto module = KJ_ASSERT_NONNULL(webAssembly.get(lock, "Module").tryCast<jsg::JsObject>());
 
-    jsg::check(v8::Local<v8::Object>(module)->DefineOwnProperty(
-        context, v8::Symbol::GetHasInstance(lock.v8Isolate), function));
-  });
+  jsg::check(v8::Local<v8::Object>(module)->DefineOwnProperty(
+      context, v8::Symbol::GetHasInstance(lock.v8Isolate), function));
 }
 
 // Installs a shim around WebAssembly.instantiate and WebAssembly.Instance that hooks into the
-// shutdown signal if it exists
-void shimWebAssemblyInstantiate(jsg::Lock& lock, v8::Local<v8::Context> context) {
-  // We need to enter the context because this function compiles and executes JavaScript via
-  // v8::Script::Compile/Run. setupContext() is called before JSG_WITHIN_CONTEXT_SCOPE, so the
-  // context is not yet entered at this point.
-  v8::Context::Scope contextScope(context);
-
+// shutdown signal if it exists.
+void shimWebAssemblyInstantiate(
+    jsg::Lock& lock, v8::Local<v8::Context> context, jsg::JsObject webAssembly) {
   // Create a C++ callback that the JS shims call to register a {instance, memory, signalOffset,
   // terminatedOffset} tuple.
   // __registerTrackedWasmInstance(instance: WebAssembly.Instance,
@@ -1990,7 +1983,7 @@ void shimWebAssemblyInstantiate(jsg::Lock& lock, v8::Local<v8::Context> context)
   auto registerFn = jsg::check(v8::Function::New(context, registerCb));
 
   // Call the pre-evaluated (or compile-cached) per-isolate bootstrap shim installer — it mutates
-  // `WebAssembly` in place.
+  // `webAssembly` in place.
   auto shimFn = [&]() -> jsg::JsFunction {
     KJ_IF_SOME(fn, tryGetBootstrapFunction(lock, "wasm-instantiate-shim"_kj, "install"_kj)) {
       return fn;
@@ -1999,7 +1992,20 @@ void shimWebAssemblyInstantiate(jsg::Lock& lock, v8::Local<v8::Context> context)
         requireBootstrapExport(lock, "wasm-instantiate-shim"_kj).tryCast<jsg::JsObject>());
     return KJ_ASSERT_NONNULL(exports.get(lock, "install"_kj).tryCast<jsg::JsFunction>());
   }();
-  shimFn.call(lock, lock.global(), jsg::JsFunction(registerFn));
+  shimFn.call(lock, lock.global(), jsg::JsFunction(registerFn), webAssembly);
+}
+
+void webAssemblyLazyGetter(
+    v8::Local<v8::Name>, const v8::PropertyCallbackInfo<v8::Value>& info) {
+  jsg::liftKj(info, [&]() -> v8::Local<v8::Value> {
+    auto& lock = jsg::Lock::from(info.GetIsolate());
+    auto context = lock.v8Context();
+    auto wasmObj = info.DataV2().As<v8::Value>().As<v8::Object>();
+    jsg::JsObject webAssembly(wasmObj);
+    setWebAssemblyModuleHasInstance(lock, context, webAssembly);
+    shimWebAssemblyInstantiate(lock, context, webAssembly);
+    return wasmObj;
+  });
 }
 
 namespace {
@@ -2273,24 +2279,21 @@ void Worker::setupContextInternalScripts(jsg::Lock& lock, v8::Local<v8::Context>
   }
 
   // V8 only installs the `WebAssembly` global when a Wasm engine is available. It is absent under
-  // the `--jitless` v8Flag, since V8 has no Wasm interpreter. Both helpers below reach into that
-  // global unconditionally, so running them in such an isolate aborts the entire process during
-  // context setup, before any script executes. Skip them instead: a Worker that never touches
-  // WebAssembly is perfectly serviceable without either, so an absent optional capability must
-  // not be fatal.
-  bool hasWebAssembly = false;
+  // the `--jitless` v8Flag, since V8 has no Wasm interpreter. Replace it with a lazy data property
+  // that installs the Module @@HasInstance and instantiate/Instance shims on first access, avoiding
+  // per-isolate shim work for Workers that never touch WebAssembly.
   JSG_WITHIN_CONTEXT_SCOPE(lock, context, [&](jsg::Lock& lock) {
-    hasWebAssembly = lock.global().get(lock, "WebAssembly").tryCast<jsg::JsObject>() != kj::none;
+    auto global = context->Global();
+    auto wasmStr = v8::Local<v8::String>(lock.strIntern("WebAssembly"_kj));
+    auto maybeVal = global->Get(context, wasmStr);
+    v8::Local<v8::Value> val;
+    if (!maybeVal.ToLocal(&val) || !val->IsObject()) {
+      return;
+    }
+    auto attrs = jsg::check(global->GetPropertyAttributes(context, wasmStr));
+    jsg::check(
+        global->SetLazyDataProperty(context, wasmStr, webAssemblyLazyGetter, val, attrs));
   });
-  if (!hasWebAssembly) {
-    return;
-  }
-
-  // Set WebAssembly.Module @@HasInstance
-  setWebAssemblyModuleHasInstance(lock, context);
-
-  // Shim WebAssembly.instantiate to detect modules exporting "__instance_signal".
-  shimWebAssemblyInstantiate(lock, context);
 }
 // =======================================================================================
 

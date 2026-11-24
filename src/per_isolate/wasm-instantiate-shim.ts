@@ -18,14 +18,17 @@ type RegisterShutdownFn = (
   terminatedOffset: number
 ) => void;
 
-function install(registerShutdown: RegisterShutdownFn): void {
+function install(
+  registerShutdown: RegisterShutdownFn,
+  wasm: typeof WebAssembly
+): void {
   const {
     Instance: originalInstance,
     instantiate: originalInstantiate,
     Module,
     Memory,
     Global,
-  } = WebAssembly;
+  } = wasm;
 
   // Finds the first imported or exported memory with type kind 'memory'.
   function findMemory(
@@ -84,7 +87,7 @@ function install(registerShutdown: RegisterShutdownFn): void {
   //   instantiate(bytes, imports?, compileOptions?) -> Promise<{module, instance}>
   //   instantiate(module, imports?, compileOptions?) -> Promise<Instance>
   // NOTE: Exactly 1 argument defined to match WebAssembly.instantiate length.
-  WebAssembly.instantiate = function instantiate(
+  wasm.instantiate = function instantiate(
     this: unknown,
     moduleOrBytes: WebAssembly.Module | BufferSource
   ): Promise<WebAssembly.WebAssemblyInstantiatedSource | WebAssembly.Instance> {
@@ -155,7 +158,7 @@ function install(registerShutdown: RegisterShutdownFn): void {
     writable: true,
     configurable: true,
   });
-  ObjectDefineProperty(WebAssembly, 'Instance', {
+  ObjectDefineProperty(wasm, 'Instance', {
     value: Instance,
     writable: true,
     configurable: true,
