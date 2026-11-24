@@ -112,6 +112,35 @@ def _gen_script_bundle_capnp_impl(ctx):
     )
     ctx.actions.write(ctx.outputs.out, content)
 
+def _minify_js_impl(ctx):
+    """Strip comments and minify whitespace/syntax while keeping identifier names intact."""
+    esbuild_info = ctx.toolchains["@aspect_rules_esbuild//esbuild:toolchain_type"].esbuildinfo
+    esbuild_bin = esbuild_info.tool_files[0]
+    args = ctx.actions.args()
+    args.add(ctx.file.src)
+    args.add("--target=esnext")
+    args.add("--minify-whitespace")
+    args.add("--minify-syntax")
+    args.add("--log-level=error")
+    args.add("--outfile=" + ctx.outputs.out.path)
+    ctx.actions.run(
+        inputs = [ctx.file.src],
+        outputs = [ctx.outputs.out],
+        executable = esbuild_bin,
+        arguments = [args],
+        mnemonic = "MinifyPerIsolateJs",
+        progress_message = "Minifying %{input}",
+    )
+
+_minify_js = rule(
+    implementation = _minify_js_impl,
+    attrs = {
+        "src": attr.label(allow_single_file = True, mandatory = True),
+        "out": attr.output(mandatory = True),
+    },
+    toolchains = ["@aspect_rules_esbuild//esbuild:toolchain_type"],
+)
+
 _gen_script_bundle_capnp = rule(
     implementation = _gen_script_bundle_capnp_impl,
     attrs = {
@@ -201,7 +230,7 @@ def wd_ts_script_bundle(
     for js in js_files:
         sname = _script_name(js)
         flat = _flat_name(sname)
-        copy_file(name = flat + "@copy", src = js, out = flat)
+        _minify_js(name = flat + "@minify", src = js, out = flat)
         scripts_dict[flat] = script_prefix + sname
 
     # 3. Optional: generate V8 compile caches
